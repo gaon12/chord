@@ -11,6 +11,7 @@ from __future__ import annotations
 from chord.skills.air_quality import AirQualitySkill
 from chord.skills.delivery import DeliverySkill
 from chord.skills.exchange_rate import ExchangeRateSkill
+from chord.skills.flight import FlightSkill
 from chord.skills.registry import SkillRegistry
 from chord.skills.stock import StockPriceSkill
 from chord.skills.weather import WeatherSkill
@@ -32,6 +33,7 @@ def create_default_registry() -> SkillRegistry:
     registry.register(StockPriceSkill())
     registry.register(AirQualitySkill())
     registry.register(DeliverySkill())
+    registry.register(FlightSkill())
 
     # -- LLM-powered skills (summarize / translate / eli5) --------------------
     # (registered as they are implemented)
