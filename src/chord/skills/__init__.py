@@ -18,6 +18,7 @@ from chord.skills.registry import SkillRegistry
 from chord.skills.stock import StockPriceSkill
 from chord.skills.summarize import SummarizeSkill
 from chord.skills.translate import TranslateSkill
+from chord.skills.url_shortener import ExpandUrlSkill, ShortenUrlSkill
 from chord.skills.weather import WeatherSkill
 
 __all__ = ["SkillRegistry", "create_default_registry"]
@@ -38,6 +39,8 @@ def create_default_registry(settings: Settings) -> SkillRegistry:
     registry.register(AirQualitySkill(settings))
     registry.register(DeliverySkill(settings))
     registry.register(FlightSkill(settings))
+    registry.register(ShortenUrlSkill(settings))
+    registry.register(ExpandUrlSkill(settings))
 
     # -- LLM-powered skills (summarize / translate / eli5) --------------------
     # They reuse the same chat model as the main conversation, so a
