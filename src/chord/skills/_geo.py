@@ -13,7 +13,7 @@ GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 
 
 async def geocode(city: str) -> dict[str, Any]:
-    """Resolve a city name into name/country/latitude/longitude."""
+    """Resolve a city name into location details."""
     data = await get_json(GEOCODING_URL, params={"name": city, "count": 1})
     results = data.get("results") or []
     if not results:
@@ -22,6 +22,9 @@ async def geocode(city: str) -> dict[str, Any]:
     return {
         "name": first.get("name", city),
         "country": first.get("country", ""),
+        # First-level administrative division, e.g. 'Seoul' or 'Tokyo';
+        # used to pick Korean providers such as AirKorea.
+        "admin1": first.get("admin1", "") or "",
         "latitude": first["latitude"],
         "longitude": first["longitude"],
     }

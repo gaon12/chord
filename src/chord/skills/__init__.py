@@ -35,7 +35,7 @@ def create_default_registry(settings: Settings) -> SkillRegistry:
     registry.register(WeatherSkill(settings))
     registry.register(ExchangeRateSkill())
     registry.register(StockPriceSkill())
-    registry.register(AirQualitySkill())
+    registry.register(AirQualitySkill(settings))
     registry.register(DeliverySkill())
     registry.register(FlightSkill())
 
