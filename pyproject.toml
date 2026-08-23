@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# ---------------------------------------------------------------------------
+# Package metadata
+# ---------------------------------------------------------------------------
+[project]
+name = "chord"
+version = "0.1.0"
+description = "A Discord bot powered by any OpenAI-compatible LLM, with pluggable skills and MCP tools."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "chord developers" }]
+keywords = ["discord", "bot", "llm", "openai", "mcp", "skills"]
+
+dependencies = [
+    # Discord gateway/API client.
+    "discord.py>=2.4",
+    # Official OpenAI SDK. Works with any OpenAI-compatible server via base_url.
+    "openai>=1.40",
+    # Typed settings loaded from environment variables / .env files.
+    "pydantic-settings>=2.3",
+    # Async HTTP client used by the built-in data skills.
+    "httpx>=0.27",
+    # Model Context Protocol client SDK (external tool servers).
+    "mcp>=1.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    # HTTP mocking so skill tests never touch the real network.
+    "respx>=0.21",
+    # Linting + formatting.
+    "ruff>=0.5",
+]
+
+# Console entry point so the bot can be started with `chord` after install.
+[project.scripts]
+chord = "chord.__main__:main"
+
+# ---------------------------------------------------------------------------
+# Tool configuration
+# ---------------------------------------------------------------------------
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort (import ordering)
+    "B",   # bugbear (likely bugs)
+    "UP",  # pyupgrade (modern syntax)
+]
+ignore = [
+    "E501", # long lines are handled by the formatter where possible
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q"
