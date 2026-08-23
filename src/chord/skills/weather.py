@@ -10,10 +10,10 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
+from chord.skills._geo import geocode
 from chord.skills._http import SkillHTTPError, get_json
 from chord.skills.base import Skill
 
-GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 
 # WMO weather interpretation codes (https://open-meteo.com/en/docs),
@@ -73,7 +73,7 @@ class WeatherSkill(Skill):
     }
 
     async def run(self, city: str) -> str:
-        location = await _geocode(city)
+        location = await geocode(city)
         current = await _fetch_current(location["latitude"], location["longitude"])
 
         temperature = current.get("temperature_2m")
@@ -89,21 +89,6 @@ class WeatherSkill(Skill):
             f"Wind speed: {wind} km/h.",
         ]
         return " ".join(parts)
-
-
-async def _geocode(city: str) -> dict[str, Any]:
-    """Resolve a city name to coordinates using Open-Meteo geocoding."""
-    data = await get_json(GEOCODING_URL, params={"name": city, "count": 1})
-    results = data.get("results") or []
-    if not results:
-        raise SkillHTTPError(f"Could not find a city named '{city}'.")
-    first = results[0]
-    return {
-        "name": first.get("name", city),
-        "country": first.get("country", ""),
-        "latitude": first["latitude"],
-        "longitude": first["longitude"],
-    }
 
 
 async def _fetch_current(latitude: float, longitude: float) -> dict[str, Any]:
