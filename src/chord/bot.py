@@ -21,7 +21,9 @@ from chord.config import Settings
 from chord.conversation import ConversationStore
 from chord.engine import ChatEngine
 from chord.llm import LLMService
+from chord.mcp_client import McpManager
 from chord.skills import create_default_registry
+from chord.skills.registry import SkillRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +93,7 @@ class ChordBot(discord.Client):
         self,
         settings: Settings,
         engine: ChatEngine,
+        registry: SkillRegistry | None = None,
     ) -> None:
         # message_content intent is required to read non-command messages;
         # it must also be enabled in the developer portal.
@@ -103,8 +106,28 @@ class ChordBot(discord.Client):
         # mention check easy to exercise in tests.
         self.me: discord.ClientUser | None = None
 
+        self._settings = settings
         self._engine = engine
         self._store = ConversationStore()
+        # The registry is kept so setup_hook can add MCP tools later;
+        # the engine reads it live, so additions are picked up
+        # immediately without rebuilding the engine.
+        self._registry = registry or SkillRegistry()
+        self._mcp = McpManager()
+
+    async def setup_hook(self) -> None:
+        """Called once after login but before the gateway connects.
+
+        MCP servers are started here so their tools are registered
+        before the first message arrives.
+        """
+        registered = await self._mcp.start(self._settings, self._registry.register)
+        if registered:
+            logger.info("Registered %d MCP tool(s).", registered)
+
+    async def close(self) -> None:
+        await self._mcp.stop()
+        await super().close()
 
     async def on_ready(self) -> None:
         self.me = self.user
@@ -178,4 +201,4 @@ def build_bot(settings: Settings) -> ChordBot:
         settings.openai_model,
         settings.openai_base_url,
     )
-    return ChordBot(settings=settings, engine=engine)
+    return ChordBot(settings=settings, engine=engine, registry=registry)

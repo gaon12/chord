@@ -42,7 +42,6 @@ class ChatEngine:
         self._llm = llm
         self._registry = registry
         self._system_prompt = system_prompt
-        self._tools = registry.to_openai_tools()
         self._max_tool_rounds = max_tool_rounds
 
     async def reply(
@@ -70,7 +69,7 @@ class ChatEngine:
         turn_start = 1
 
         for _round in range(self._max_tool_rounds):
-            completion = await self._llm.complete(messages, self._tools)
+            completion = await self._llm.complete(messages, self._registry.to_openai_tools())
             message = completion.choices[0].message
             messages.append(_serialize_message(message))
 
