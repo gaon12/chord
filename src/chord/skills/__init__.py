@@ -20,6 +20,7 @@ from chord.skills.registry import SkillRegistry
 from chord.skills.stock import StockPriceSkill
 from chord.skills.summarize import SummarizeSkill
 from chord.skills.translate import TranslateSkill
+from chord.skills.unit_convert import ConvertUnitsSkill
 from chord.skills.url_shortener import ExpandUrlSkill, ShortenUrlSkill
 from chord.skills.weather import WeatherSkill
 
@@ -47,6 +48,7 @@ def create_default_registry(settings: Settings) -> SkillRegistry:
     registry.register(GetDirectionsSkill(settings))
     registry.register(CurrentDatetimeSkill())
     registry.register(ConvertTimezoneSkill())
+    registry.register(ConvertUnitsSkill())
 
     # -- LLM-powered skills (summarize / translate / eli5) --------------------
     # They reuse the same chat model as the main conversation, so a
