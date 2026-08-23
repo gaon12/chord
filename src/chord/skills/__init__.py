@@ -17,6 +17,7 @@ from chord.skills.flight import FlightSkill
 from chord.skills.registry import SkillRegistry
 from chord.skills.stock import StockPriceSkill
 from chord.skills.summarize import SummarizeSkill
+from chord.skills.translate import TranslateSkill
 from chord.skills.weather import WeatherSkill
 
 __all__ = ["SkillRegistry", "create_default_registry"]
@@ -43,6 +44,7 @@ def create_default_registry(settings: Settings) -> SkillRegistry:
     # single LLMService instance is shared across all of them.
     llm = LLMService(settings)
     registry.register(SummarizeSkill(llm))
+    registry.register(TranslateSkill(llm))
 
     return registry
 
