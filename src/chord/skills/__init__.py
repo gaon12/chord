@@ -36,7 +36,7 @@ def create_default_registry(settings: Settings) -> SkillRegistry:
     registry.register(ExchangeRateSkill())
     registry.register(StockPriceSkill())
     registry.register(AirQualitySkill(settings))
-    registry.register(DeliverySkill())
+    registry.register(DeliverySkill(settings))
     registry.register(FlightSkill(settings))
 
     # -- LLM-powered skills (summarize / translate / eli5) --------------------

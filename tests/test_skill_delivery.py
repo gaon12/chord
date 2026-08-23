@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 import respx
 
+from chord.config import Settings
 from chord.skills._http import SkillHTTPError
 from chord.skills.delivery import (
     CJLogisticsCarrier,
@@ -22,6 +23,18 @@ from chord.skills.delivery import (
 )
 
 CJ_PAGE = "https://www.cjlogistics.com/ko/tool/parcel/tracking"
+SWEETTRACKER_URL = "https://tracking.sweettracker.co.kr/api/v1/trackingInfo"
+
+
+def _settings(**keys):
+    return Settings(
+        _env_file=None,
+        discord_token="t",
+        openai_api_key="k",
+        **keys,
+    )
+
+
 CJ_AJAX = "https://www.cjlogistics.com/ko/tool/parcel/tracking-detail"
 POST_URL = "https://service.epost.go.kr/trace.RetrieveDomRigiTraceList.comm"
 
@@ -158,7 +171,7 @@ async def test_skill_formats_latest_status_and_link():
     respx.get(CJ_PAGE).respond(text=_cj_page_html())
     respx.post(CJ_AJAX).respond(json=_cj_detail_json())
 
-    result = await DeliverySkill().run(carrier="cj", tracking_number="12345678901")
+    result = await DeliverySkill(_settings()).run(carrier="cj", tracking_number="12345678901")
 
     assert "CJ Logistics tracking 12345678901" in result
     assert "out for delivery" in result
@@ -177,7 +190,7 @@ async def test_skill_strips_non_digit_characters():
 
 async def test_non_numeric_input_fails_fast():
     with pytest.raises(SkillHTTPError, match="does not look like"):
-        await DeliverySkill().run(carrier="cj", tracking_number="abc")
+        await DeliverySkill(_settings()).run(carrier="cj", tracking_number="abc")
 
 
 # -- Helpers ----------------------------------------------------------------------------
@@ -190,3 +203,60 @@ def test_latest_event_picks_last():
     ]
     assert latest_event(events).status == "delivered"
     assert latest_event([]) is None
+
+
+# -- SweetTracker provider ----------------------------------------------------------
+
+
+@respx.mock
+async def test_sweettracker_preferred_when_key_present():
+    respx.get(SWEETTRACKER_URL).respond(
+        json={
+            "status": True,
+            "carrier": {"id": "04", "name": "CJ대한통운"},
+            "trackingDetails": [
+                {
+                    "time": "2026-08-21 09:10:00",
+                    "status": {"id": "pickup", "text": "상품접수"},
+                    "location": {"name": "서울특별지사"},
+                },
+                {
+                    "time": "2026-08-22 15:00:00",
+                    "status": {"id": "delivered", "text": "배달완료"},
+                    "location": {"name": "강남지점"},
+                },
+            ],
+        }
+    )
+
+    settings = _settings(sweettracker_api_key="secret")
+    result = await DeliverySkill(settings).run(carrier="cj", tracking_number="12345678901")
+
+    assert "CJ Logistics tracking 12345678901" in result
+    assert "배달완료" in result
+    assert "Delivered." in result
+
+
+@respx.mock
+async def test_sweettracker_api_error_surfaces_message():
+    respx.get(SWEETTRACKER_URL).respond(json={"status": False, "msg": "잘못된 운송장 번호입니다."})
+
+    settings = _settings(sweettracker_api_key="secret")
+    with pytest.raises(SkillHTTPError, match="잘못된"):
+        await DeliverySkill(settings).run(carrier="cj", tracking_number="12345678901")
+
+
+async def test_sweettracker_only_carriers_require_key():
+    settings = _settings()  # no key
+    with pytest.raises(SkillHTTPError, match="SWEETTRACKER_API_KEY"):
+        resolve_carrier("hanjin", settings.sweettracker_api_key)
+
+
+def test_is_delivered_covers_languages():
+    from chord.skills.delivery import is_delivered
+
+    assert is_delivered("delivered")
+    assert is_delivered("배달완료")
+    assert is_delivered("도착완료")
+    assert not is_delivered("in transit")
+    assert not is_delivered("상품이동중")

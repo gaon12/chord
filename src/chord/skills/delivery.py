@@ -28,6 +28,7 @@ from chord.skills._http import (
     DEFAULT_HEADERS,
     TIMEOUT_SECONDS,
     SkillHTTPError,
+    get_json,
     get_text,
 )
 from chord.skills.base import Skill
@@ -71,6 +72,24 @@ CJ_STATUS_CODES = {
 }
 
 _POST_PAGE_URL = "https://service.epost.go.kr/trace.RetrieveDomRigiTraceList.comm"
+
+#: SweetTracker (tracking.sweettracker.co.kr) company codes for the
+#: carriers this skill knows by id.
+SWEETTRACKER_COMPANY_CODES = {
+    "post": "01",  # 우체국택배
+    "cj": "04",  # CJ대한통운
+    "hanjin": "05",  # 한진택배
+    "logen": "06",  # 로젠택배
+    "lotte": "08",  # 롯데택배
+}
+SWEETTRACKER_NAMES = {
+    "post": "Korea Post",
+    "cj": "CJ Logistics",
+    "hanjin": "Hanjin",
+    "logen": "Logen",
+    "lotte": "Lotte",
+}
+SWEETTRACKER_URL = "https://tracking.sweettracker.co.kr/api/v1/trackingInfo"
 
 _ROW_RE = re.compile(r"<tr[^>]*>(.*?)</tr>", re.S)
 _CELL_RE = re.compile(r"<td[^>]*>(.*?)</td>", re.S)
@@ -193,6 +212,52 @@ class KoreaPostCarrier(Carrier):
         return events
 
 
+class SweetTrackerCarrier(Carrier):
+    """Aggregated tracking via SweetTracker (스마트택배), needs an API key.
+
+    Preferred over the site scrapers because it covers many carriers
+    (CJ, 우체국, 한진, 로젠, 롯데, ...) behind one normalized API.
+    """
+
+    id = "sweettracker"
+
+    def __init__(self, api_key: str, company_code: str, display_name: str) -> None:
+        self._api_key = api_key
+        self.company_code = company_code
+        self.name = display_name
+
+    def tracking_url(self, number: str) -> str:
+        return f"https://tracking.sweettracker.co.kr/?t_code={self.company_code}&t_invoice={number}"
+
+    async def track(self, number: str) -> list[TrackingEvent]:
+        data = await get_json(
+            SWEETTRACKER_URL,
+            params={
+                "t_key": self._api_key,
+                "t_code": self.company_code,
+                "t_invoice": number,
+            },
+        )
+        # The API signals failures with {"status": false, "msg": "..."}.
+        if data.get("status") is False:
+            raise SkillHTTPError(f"SweetTracker: {data.get('msg', 'lookup failed')}.")
+
+        details = data.get("trackingDetails") or []
+        events = [
+            TrackingEvent(
+                time=str(item.get("time", "")).strip(),
+                location=str((item.get("location") or {}).get("name", "")).strip(),
+                status=str((item.get("status") or {}).get("text", "")).strip(),
+            )
+            for item in details
+        ]
+        if not events:
+            raise SkillHTTPError(
+                f"No tracking records found at {self.name} for '{number}'. Check the number."
+            )
+        return events
+
+
 def _parse_post_table(html: str) -> list[TrackingEvent]:
     """Extract events from the Korea Post ``processTable`` markup.
 
@@ -234,25 +299,55 @@ CARRIER_ALIASES: dict[str, str] = {
     "koreapost": "post",
     "epost": "post",
     "우체국": "post",
+    "hanjin": "hanjin",
+    "한진": "hanjin",
+    "logen": "logen",
+    "로젠": "logen",
+    "lotte": "lotte",
+    "롯데": "lotte",
 }
 
 
-def resolve_carrier(name: str) -> Carrier:
-    """Look up a carrier by id or alias."""
+def resolve_carrier(name: str, sweettracker_api_key: str = "") -> Carrier:
+    """Look up a carrier by id or alias.
+
+    When a SweetTracker API key is configured and the carrier is one
+    SweetTracker covers, it is preferred over the site scrapers
+    because one stable JSON API beats per-site HTML parsing.
+    """
     key = CARRIER_ALIASES.get(name.strip().lower())
     if key is None:
-        supported = ", ".join(sorted({a for a in CARRIER_ALIASES}))
+        supported = ", ".join(sorted(set(CARRIER_ALIASES)))
         raise SkillHTTPError(f"Unknown carrier '{name}'. Supported: {supported}.")
-    carrier_class = {"cj": CJLogisticsCarrier, "post": KoreaPostCarrier}[key]
-    return carrier_class()
+
+    company_code = SWEETTRACKER_COMPANY_CODES.get(key)
+    if sweettracker_api_key and company_code:
+        return SweetTrackerCarrier(
+            api_key=sweettracker_api_key,
+            company_code=company_code,
+            display_name=SWEETTRACKER_NAMES[key],
+        )
+
+    scraper_classes = {"cj": CJLogisticsCarrier, "post": KoreaPostCarrier}
+    scraper_class = scraper_classes.get(key)
+    if scraper_class is None:
+        raise SkillHTTPError(
+            f"'{name}' requires a SweetTracker API key (set SWEETTRACKER_API_KEY)."
+        )
+    return scraper_class()
+
+
+def is_delivered(status: str) -> bool:
+    """Delivered detection across carriers (English + Korean labels)."""
+    lowered = status.lower()
+    return "delivered" in lowered or "배달완료" in status or "도착완료" in status
 
 
 def format_tracking(carrier: Carrier, number: str, events: list[TrackingEvent]) -> str:
     """Render events into one compact chat-friendly summary."""
     last = latest_event(events)
     lines = [f"{carrier.name} tracking {number}: {last.status} ({last.time}, {last.location})."]
-    delivered = last.status == "delivered"
-    lines.append("Delivered." if delivered else "Not delivered yet.")
+    lines.append("Delivered." if is_delivered(last.status) else "Not delivered yet.")
     history = " | ".join(f"{event.status} @ {event.location} {event.time}" for event in events[-3:])
     lines.append(f"Recent scans: {history}")
     lines.append(f"Details: {carrier.tracking_url(number)}")
@@ -262,8 +357,9 @@ def format_tracking(carrier: Carrier, number: str, events: list[TrackingEvent]) 
 class DeliverySkill(Skill):
     name = "track_parcel"
     description = (
-        "Track a Korean parcel delivery. Supported carriers: "
-        "'cj' (CJ Logistics / CJ대한통운) and 'post' (Korea Post / 우체국). "
+        "Track a Korean parcel delivery. Supported carriers: 'cj' "
+        "(CJ Logistics / CJ대한통운), 'post' (Korea Post / 우체국), plus "
+        "'hanjin', 'logen' and 'lotte' when SWEETTRACKER_API_KEY is set. "
         "Pass the carrier id and the tracking number."
     )
     parameters: ClassVar[dict] = {
@@ -271,7 +367,10 @@ class DeliverySkill(Skill):
         "properties": {
             "carrier": {
                 "type": "string",
-                "description": "Carrier id: 'cj' for CJ Logistics, 'post' for Korea Post.",
+                "description": (
+                    "Carrier id: 'cj' (CJ Logistics), 'post' (Korea Post), "
+                    "'hanjin', 'logen' or 'lotte'."
+                ),
             },
             "tracking_number": {
                 "type": "string",
@@ -281,11 +380,14 @@ class DeliverySkill(Skill):
         "required": ["carrier", "tracking_number"],
     }
 
+    def __init__(self, settings) -> None:
+        self._settings = settings
+
     async def run(self, carrier: str, tracking_number: str) -> str:
         number = re.sub(r"\D", "", tracking_number)
         if not number:
             raise SkillHTTPError(f"'{tracking_number}' does not look like a tracking number.")
 
-        resolved = resolve_carrier(carrier)
+        resolved = resolve_carrier(carrier, self._settings.sweettracker_api_key)
         events = await resolved.track(number)
         return format_tracking(resolved, number, events)
