@@ -32,7 +32,7 @@ def create_default_registry(settings: Settings) -> SkillRegistry:
     registry = SkillRegistry()
 
     # -- Data skills (real-world lookups) ------------------------------------
-    registry.register(WeatherSkill())
+    registry.register(WeatherSkill(settings))
     registry.register(ExchangeRateSkill())
     registry.register(StockPriceSkill())
     registry.register(AirQualitySkill())
