@@ -21,9 +21,20 @@ from chord.skills.base import Skill
 
 OPENSKY_URL = "https://opensky-network.org/api/states/all"
 ADSBDB_URL = "https://api.adsbdb.com/v0/callsign/{callsign}"
+AVIATIONSTACK_URL = "https://api.aviationstack.com/v1/flights"
 
 #: How far from the city center to search, in degrees (~330 km).
 SEARCH_RADIUS_DEGREES = 3.0
+
+#: Human labels for Aviationstack flight statuses.
+AVIATIONSTACK_STATUS = {
+    "scheduled": "scheduled",
+    "active": "en route",
+    "landed": "landed",
+    "cancelled": "cancelled",
+    "incident": "incident",
+    "diverted": "diverted",
+}
 
 #: Indices inside an OpenSky state vector array.
 IDX_ICAO24 = 0
@@ -90,6 +101,61 @@ def _airport_label(airport: dict | None) -> str:
     return f"{code} {city}".strip()
 
 
+async def fetch_aviationstack(api_key: str, callsign: str) -> str:
+    """Scheduled/real-time flight info from Aviationstack.
+
+    Tries the IATA flight designator first (KE801) and then the ICAO
+    one (KAL801), since callers may supply either form. Raises
+    SkillHTTPError when no matching flight exists so the caller can
+    fall back to radar data.
+    """
+    data = {}
+    error: Exception | None = None
+    for param in ("flight_iata", "flight_icao"):
+        try:
+            data = await get_json(
+                AVIATIONSTACK_URL,
+                params={"access_key": api_key, param: callsign, "limit": 1},
+            )
+            if data.get("data"):
+                break
+        except SkillHTTPError as exc:
+            error = exc
+    flights = data.get("data") or []
+    if not flights:
+        if error is not None:
+            raise error
+        raise SkillHTTPError(f"No flight found for '{callsign}' on Aviationstack.")
+
+    entry = flights[0]
+    status = AVIATIONSTACK_STATUS.get(str(entry.get("flight_status", "")), "unknown")
+    airline = ((entry.get("airline") or {}).get("name")) or ""
+    flight_iata = (entry.get("flight") or {}).get("iata") or callsign
+
+    departure = entry.get("departure") or {}
+    arrival = entry.get("arrival") or {}
+
+    def endpoint(side: dict) -> str:
+        name = side.get("airport") or "?"
+        iata = side.get("iata") or ""
+        code = f" ({iata})" if iata else ""
+        return f"{name}{code}"
+
+    def scheduled_time(side: dict) -> str:
+        raw = side.get("scheduled") or ""
+        return f", scheduled {raw[:16].replace('T', ' ')}" if raw else ""
+
+    delay = departure.get("delay")
+    delay_part = f", delayed {int(delay)} min" if delay else ""
+
+    header = f"{airline} {flight_iata}: {status}".strip()
+    route_line = (
+        f"{endpoint(departure)}{scheduled_time(departure)}{delay_part}"
+        f" -> {endpoint(arrival)}{scheduled_time(arrival)}."
+    )
+    return f"{header}\n{route_line}"
+
+
 class FlightSkill(Skill):
     name = "get_flight_info"
     description = (
@@ -97,6 +163,10 @@ class FlightSkill(Skill):
         "position, altitude, speed and route of that flight. "
         "With a city: how many aircraft are flying near it right now."
     )
+
+    def __init__(self, settings) -> None:
+        self._settings = settings
+
     parameters: ClassVar[dict] = {
         "type": "object",
         "properties": {
@@ -123,6 +193,15 @@ class FlightSkill(Skill):
 
     async def _track_callsign(self, raw_callsign: str) -> str:
         callsign = raw_callsign.replace(" ", "").upper()
+
+        # Preferred provider: Aviationstack (scheduled + real-time data),
+        # available when the operator configured an API key.
+        if self._settings.aviationstack_api_key:
+            try:
+                return await fetch_aviationstack(self._settings.aviationstack_api_key, callsign)
+            except SkillHTTPError:
+                pass  # fall through to the key-less radar sources
+
         payload = await get_json(OPENSKY_URL, params={"callsign": callsign})
         flights = [flight for flight in parse_states(payload) if flight.callsign == callsign]
         if not flights:
