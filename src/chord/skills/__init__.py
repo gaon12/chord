@@ -8,6 +8,7 @@ Adding a new skill is two steps:
 
 from __future__ import annotations
 
+from chord.skills.air_quality import AirQualitySkill
 from chord.skills.exchange_rate import ExchangeRateSkill
 from chord.skills.registry import SkillRegistry
 from chord.skills.stock import StockPriceSkill
@@ -28,6 +29,7 @@ def create_default_registry() -> SkillRegistry:
     registry.register(WeatherSkill())
     registry.register(ExchangeRateSkill())
     registry.register(StockPriceSkill())
+    registry.register(AirQualitySkill())
 
     # -- LLM-powered skills (summarize / translate / eli5) --------------------
     # (registered as they are implemented)
