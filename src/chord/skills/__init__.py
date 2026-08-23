@@ -23,6 +23,7 @@ from chord.skills.translate import TranslateSkill
 from chord.skills.unit_convert import ConvertUnitsSkill
 from chord.skills.url_shortener import ExpandUrlSkill, ShortenUrlSkill
 from chord.skills.weather import WeatherSkill
+from chord.skills.web_search import WebSearchSkill
 
 __all__ = ["SkillRegistry", "create_default_registry"]
 
@@ -49,6 +50,7 @@ def create_default_registry(settings: Settings) -> SkillRegistry:
     registry.register(CurrentDatetimeSkill())
     registry.register(ConvertTimezoneSkill())
     registry.register(ConvertUnitsSkill())
+    registry.register(WebSearchSkill())
 
     # -- LLM-powered skills (summarize / translate / eli5) --------------------
     # They reuse the same chat model as the main conversation, so a
