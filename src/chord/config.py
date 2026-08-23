@@ -62,14 +62,32 @@ class Settings(BaseSettings):
     mcp_enabled: bool = True
 
     # -- Optional third-party API keys ---------------------------------------
-    # All skills work without keys (free data sources are the default);
-    # these keys simply unlock better/different providers.
+    # Skills fall back to key-less free sources; these keys unlock the
+    # preferred Korean/official providers.
+
+    #: KMA (기상청 단기예보) key for official Korean weather.
+    kma_api_key: str = ""
+
+    #: WeatherAPI.com key for worldwide weather.
+    weatherapi_api_key: str = ""
 
     #: OpenWeather key, used by the weather skill when present.
     openweather_api_key: str = ""
 
     #: AirKorea (에어코리아) key for Korean station-level air quality.
     airkorea_api_key: str = ""
+
+    #: Aviationstack key for flight lookup (real-time flights).
+    aviationstack_api_key: str = ""
+
+    #: SweetTracker (스마트택배) key for aggregated parcel tracking.
+    sweettracker_api_key: str = ""
+
+    #: lrl.kr URL shortener API key (UUID, sent as x-api-key).
+    lrl_api_key: str = ""
+
+    #: Kakao REST API key for Korean maps/places/navigation.
+    kakao_rest_api_key: str = ""
 
 
 def load_settings(env_file: str | Path | None = None) -> Settings:
