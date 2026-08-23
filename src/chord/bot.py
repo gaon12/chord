@@ -166,7 +166,7 @@ def build_bot(settings: Settings) -> ChordBot:
     This is the composition root: everything (LLM client, skills, MCP,
     engine) gets connected here, keeping individual modules decoupled.
     """
-    registry = create_default_registry()
+    registry = create_default_registry(settings)
     engine = ChatEngine(
         llm=LLMService(settings),
         registry=registry,

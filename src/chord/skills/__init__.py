@@ -8,18 +8,21 @@ Adding a new skill is two steps:
 
 from __future__ import annotations
 
+from chord.config import Settings
+from chord.llm import LLMService
 from chord.skills.air_quality import AirQualitySkill
 from chord.skills.delivery import DeliverySkill
 from chord.skills.exchange_rate import ExchangeRateSkill
 from chord.skills.flight import FlightSkill
 from chord.skills.registry import SkillRegistry
 from chord.skills.stock import StockPriceSkill
+from chord.skills.summarize import SummarizeSkill
 from chord.skills.weather import WeatherSkill
 
 __all__ = ["SkillRegistry", "create_default_registry"]
 
 
-def create_default_registry() -> SkillRegistry:
+def create_default_registry(settings: Settings) -> SkillRegistry:
     """Build a registry containing every built-in skill.
 
     Each skill contributes exactly one line here, which keeps the list
@@ -34,6 +37,14 @@ def create_default_registry() -> SkillRegistry:
     registry.register(AirQualitySkill())
     registry.register(DeliverySkill())
     registry.register(FlightSkill())
+
+    # -- LLM-powered skills (summarize / translate / eli5) --------------------
+    # They reuse the same chat model as the main conversation, so a
+    # single LLMService instance is shared across all of them.
+    llm = LLMService(settings)
+    registry.register(SummarizeSkill(llm))
+
+    return registry
 
     # -- LLM-powered skills (summarize / translate / eli5) --------------------
     # (registered as they are implemented)
