@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from chord.skills.exchange_rate import ExchangeRateSkill
 from chord.skills.registry import SkillRegistry
+from chord.skills.stock import StockPriceSkill
 from chord.skills.weather import WeatherSkill
 
 __all__ = ["SkillRegistry", "create_default_registry"]
@@ -26,6 +27,7 @@ def create_default_registry() -> SkillRegistry:
     # -- Data skills (real-world lookups) ------------------------------------
     registry.register(WeatherSkill())
     registry.register(ExchangeRateSkill())
+    registry.register(StockPriceSkill())
 
     # -- LLM-powered skills (summarize / translate / eli5) --------------------
     # (registered as they are implemented)
