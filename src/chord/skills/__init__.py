@@ -11,6 +11,7 @@ from __future__ import annotations
 from chord.config import Settings
 from chord.llm import LLMService
 from chord.skills.air_quality import AirQualitySkill
+from chord.skills.datetime_info import ConvertTimezoneSkill, CurrentDatetimeSkill
 from chord.skills.delivery import DeliverySkill
 from chord.skills.exchange_rate import ExchangeRateSkill
 from chord.skills.flight import FlightSkill
@@ -44,6 +45,8 @@ def create_default_registry(settings: Settings) -> SkillRegistry:
     registry.register(ExpandUrlSkill(settings))
     registry.register(FindPlacesSkill(settings))
     registry.register(GetDirectionsSkill(settings))
+    registry.register(CurrentDatetimeSkill())
+    registry.register(ConvertTimezoneSkill())
 
     # -- LLM-powered skills (summarize / translate / eli5) --------------------
     # They reuse the same chat model as the main conversation, so a
