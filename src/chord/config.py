@@ -101,6 +101,9 @@ class Settings(BaseSettings):
     #: JSON file where provider usage counters are persisted.
     quota_store_path: Path = Path("usage.json")
 
+    #: Markdown file defining the bot's character (system prompt body).
+    persona_path: Path = Path("persona.md")
+
 
 def load_settings(env_file: str | Path | None = None) -> Settings:
     """Load settings, raising an error that actually helps fix the problem.

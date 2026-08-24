@@ -23,6 +23,7 @@ from chord.conversation import ConversationStore
 from chord.engine import ChatEngine
 from chord.llm import LLMService
 from chord.mcp_client import McpManager
+from chord.persona import PersonaProvider
 from chord.skills import create_default_registry
 from chord.skills._quota import get_quota_store, render_usage
 from chord.skills.registry import SkillRegistry
@@ -111,6 +112,7 @@ class ChordBot(discord.Client):
 
         self._settings = settings
         self._engine = engine
+        self._persona = PersonaProvider(settings.persona_path)
         self._store = ConversationStore()
         # The registry is kept so setup_hook can add MCP tools later;
         # the engine reads it live, so additions are picked up
@@ -173,6 +175,8 @@ class ChordBot(discord.Client):
             return
 
         channel_id = message.channel.id
+        # Persona edits land on the very next message - no restart.
+        self._engine.system_prompt = self._persona.get()
         async with message.channel.typing():
             try:
                 answer, new_messages = await self._engine.reply(

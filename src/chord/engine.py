@@ -41,7 +41,8 @@ class ChatEngine:
     ) -> None:
         self._llm = llm
         self._registry = registry
-        self._system_prompt = system_prompt
+        # Public and mutable so callers can swap the persona at runtime.
+        self.system_prompt = system_prompt
         self._max_tool_rounds = max_tool_rounds
 
     async def reply(
@@ -61,7 +62,7 @@ class ChatEngine:
             user message, intermediate tool traffic and the answer).
         """
         messages: list[dict] = [
-            {"role": "system", "content": self._system_prompt},
+            {"role": "system", "content": self.system_prompt},
             *history,
             {"role": "user", "content": user_text},
         ]
