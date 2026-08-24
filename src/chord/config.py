@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import ValidationError, field_validator
+from pydantic import Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 #: Default base URL points at the real OpenAI API, but any OpenAI-compatible
@@ -70,6 +70,11 @@ class Settings(BaseSettings):
     #: Providers that reject the parameter are detected at runtime and
     #: fall back transparently (see chord.llm.LLMService).
     reasoning_level: ReasoningLevel = "none"
+
+    #: Seconds to wait for one LLM response before giving up. The SDK
+    #: default (10 minutes) is an eternity in a chat window: a stalled
+    #: provider just looks like a bot that ignores you.
+    llm_timeout_seconds: float = Field(default=120.0, gt=0)
 
     #: System prompt prepended to every conversation.
     system_prompt: str = (

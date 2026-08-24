@@ -585,3 +585,21 @@ async def test_leaked_reasoning_never_reaches_the_channel():
     await bot.on_message(FakeMessage("<@999> hi", channel, mentions=[FakeUser(999)], guild="g"))
 
     assert channel.sent == ["Hi!"]
+
+
+async def test_llm_timeout_gets_its_own_message():
+    """A timeout is not a crash - tell the user to just ask again."""
+    from openai import APITimeoutError
+
+    bot, engine = _bot()
+    channel = FakeChannel()
+
+    async def stall(user_text, history):
+        raise APITimeoutError(request=None)
+
+    engine.reply = stall
+
+    await bot.on_message(FakeMessage("<@999> hi", channel, mentions=[FakeUser(999)], guild="g"))
+
+    assert len(channel.sent) == 1
+    assert "다시 물어봐" in channel.sent[0]

@@ -199,3 +199,21 @@ def test_reasoning_level_read_from_env_file(tmp_path):
         "DISCORD_TOKEN=t\nOPENAI_API_KEY=k\nREASONING_LEVEL=heavy\n",
     )
     assert load_settings(env_file).reasoning_level == "heavy"
+
+
+# -- LLM timeout ----------------------------------------------------------------------
+
+
+def test_llm_timeout_has_a_chat_sized_default():
+    """The SDK's own default is 10 minutes - far too long for a chat reply."""
+    assert _minimal_settings().llm_timeout_seconds == 120.0
+
+
+def test_llm_timeout_is_configurable():
+    assert _minimal_settings(llm_timeout_seconds=30).llm_timeout_seconds == 30.0
+
+
+@pytest.mark.parametrize("bad", [0, -5])
+def test_non_positive_llm_timeout_is_rejected(bad):
+    with pytest.raises(ValidationError):
+        _minimal_settings(llm_timeout_seconds=bad)

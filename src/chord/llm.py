@@ -50,6 +50,9 @@ def create_client(settings: Settings) -> AsyncOpenAI:
     return AsyncOpenAI(
         api_key=settings.openai_api_key,
         base_url=settings.openai_base_url,
+        # Without an explicit timeout the SDK waits 10 minutes per try;
+        # a chat bot that answers 10 minutes late has already failed.
+        timeout=settings.llm_timeout_seconds,
     )
 
 

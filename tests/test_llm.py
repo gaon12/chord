@@ -283,3 +283,9 @@ async def test_unrelated_bad_request_is_not_swallowed():
 def test_is_reasoning_rejection_ignores_unrelated_errors():
     assert is_reasoning_rejection("Thinking budget is not supported")
     assert not is_reasoning_rejection("rate limit exceeded")
+
+
+def test_client_carries_the_configured_timeout():
+    """A stalled provider must fail fast enough to still be answerable."""
+    settings = _settings().model_copy(update={"llm_timeout_seconds": 45.0})
+    assert create_client(settings).timeout == 45.0

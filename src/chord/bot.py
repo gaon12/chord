@@ -20,6 +20,7 @@ from typing import Any
 import discord
 from discord import app_commands
 from discord.ext import tasks
+from openai import APITimeoutError
 
 from chord.config import REASONING_EFFORT_BY_LEVEL, REASONING_LEVELS, Settings
 from chord.context import reset_current_channel, set_current_channel
@@ -534,6 +535,17 @@ class ChordBot(discord.Client):
                 answer, new_messages = await self._engine.reply(
                     prompt_text, self._store.history(channel_id)
                 )
+            except APITimeoutError:
+                logger.warning(
+                    "LLM timed out after %ss in channel %s",
+                    self._settings.llm_timeout_seconds,
+                    channel_id,
+                )
+                await self._send(
+                    message.channel,
+                    "생각이 너무 길어져서 중간에 멈췄어요. 다시 물어봐 주세요.",
+                )
+                return
             except Exception:
                 logger.exception("Chat failed in channel %s", channel_id)
                 await self._send(message.channel, "Sorry — something went wrong on my side.")
