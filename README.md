@@ -33,6 +33,7 @@ tools when a question needs real-world data.
 | Wikipedia | `get_wiki_summary` | Korean Wikipedia API | - (key-less) |
 | News headlines | `get_news` | 연합뉴스 RSS · Google News RSS | - (key-less) |
 | Random utilities | `random_pick` | dice / coin / number / pick / shuffle | - |
+| Reminders | `set_reminder`, `list_reminders` | pure Python (SQLite) | - |
 
 Everything works **without any API keys** except the URL shortener; optional
 keys unlock the official/premium providers listed above.
@@ -102,7 +103,13 @@ python -m chord        # or just `chord`, both start the bot
   *"5 km를 마일로 바꿔줘"*, *"지금 뉴욕 시간 몇 시야?"*, *"KE801 항공편 어디까지 왔어?"*
 * `!help` - show usage.
 * `!usage` - show remaining API quotas per provider.
+* `!reminders` - list pending reminders in this channel.
 * `!reset` - clear this channel's conversation memory.
+
+**Reminders**: ask naturally — *"30분 후 라면 끓어라고 알려줘"* or *"8월 25일 오후 2시에 회의"*
+— and the bot posts the message back into the same channel at the right time.
+The character is defined in `persona.md`; edit it and changes apply on the
+very next message (no restart needed).
 
 Conversations are kept per channel **in memory only** - restarting the bot
 clears them, and nothing is persisted.
