@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any, ClassVar
@@ -32,9 +33,18 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 try:  # mcp >= 2.0 renamed the HTTP transport helper.
-    from mcp.client.streamable_http import streamable_http_client
+    from mcp.client.streamable_http import (
+        create_mcp_http_client,
+        streamable_http_client,
+    )
 except ImportError:  # pragma: no cover - older SDKs
     from mcp.client.streamable_http import streamablehttp_client as streamable_http_client
+
+    def create_mcp_http_client(headers=None, **kwargs):  # type: ignore[misc]
+        import httpx
+
+        return httpx.AsyncClient(headers=headers)
+
 
 from chord.config import Settings
 from chord.skills.base import Skill
@@ -91,8 +101,17 @@ def extract_text(call_result: Any) -> str:
     return ""
 
 
-def load_server_specs(config_path: Path) -> dict[str, dict]:
-    """Read and validate the mcp.json file; missing file means no servers."""
+def load_server_specs(
+    config_path: Path,
+    env: dict[str, str] | None = None,
+) -> dict[str, dict]:
+    """Read and validate the mcp.json file; missing file means no servers.
+
+    String values may reference environment variables with
+    ``${VAR_NAME}`` (e.g. an API key kept out of the config file).
+    Resolution order: explicit ``env`` map first, then ``os.environ``;
+    unresolved placeholders are left as-is and logged.
+    """
     if not config_path.exists():
         logger.info("MCP config %s not found - skipping MCP setup.", config_path)
         return {}
@@ -102,14 +121,40 @@ def load_server_specs(config_path: Path) -> dict[str, dict]:
         logger.warning("Could not read MCP config %s: %s", config_path, exc)
         return {}
 
+    merged_env = {**os.environ, **(env or {})}
     servers = data.get("mcpServers") or {}
     valid: dict[str, dict] = {}
     for name, spec in servers.items():
         if not isinstance(spec, dict) or not ("command" in spec or "url" in spec):
             logger.warning("MCP server %r ignored: needs either 'command' or 'url'.", name)
             continue
-        valid[name] = spec
+        valid[name] = _expand_env_placeholders(spec, merged_env)
     return valid
+
+
+_PLACEHOLDER_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _expand_env_placeholders(value: Any, env_map: dict[str, str]) -> Any:
+    """Recursively replace ${VAR} in strings; unknown vars stay untouched."""
+
+    def substitute(text: str) -> str:
+        def replace(match: re.Match) -> str:
+            var = match.group(1)
+            if var in env_map:
+                return env_map[var]
+            logger.warning("MCP config references unset variable $%s.", var)
+            return match.group(0)
+
+        return _PLACEHOLDER_RE.sub(replace, text)
+
+    if isinstance(value, str):
+        return substitute(value)
+    if isinstance(value, dict):
+        return {k: _expand_env_placeholders(v, env_map) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_expand_env_placeholders(item, env_map) for item in value]
+    return value
 
 
 class McpManager:
@@ -117,7 +162,20 @@ class McpManager:
 
     def __init__(self) -> None:
         self._sessions: list[Any] = []
-        self._exit_stack: Any = None
+        self._http_clients: list[Any] = []
+
+    def _env_map(self, settings: Settings) -> dict[str, str]:
+        """Variables usable as ${VAR} inside mcp.json.
+
+        Real environment variables win; string-valued settings (API keys
+        loaded from .env) are exposed under their field names too.
+        """
+        env_map = {
+            key: value
+            for key, value in settings.model_dump().items()
+            if isinstance(value, str) and value
+        }
+        return {**env_map}
 
     async def start(self, settings: Settings, register) -> int:
         """Connect to all servers and register their tools.
@@ -133,7 +191,7 @@ class McpManager:
             logger.info("MCP disabled via settings.")
             return 0
 
-        specs = load_server_specs(Path(settings.mcp_config_path))
+        specs = load_server_specs(Path(settings.mcp_config_path), env=self._env_map(settings))
         if not specs:
             return 0
 
@@ -141,7 +199,15 @@ class McpManager:
         for server_name, spec in specs.items():
             try:
                 if "url" in spec:
-                    read, write, _ = await streamable_http_client(spec["url"]).__aenter__()
+                    # Custom headers (e.g. X-API-Key) ride on a dedicated
+                    # http client that we close again in stop().
+                    headers = spec.get("headers") or None
+                    http_client = create_mcp_http_client(headers=headers)
+                    streams = await streamable_http_client(
+                        spec["url"], http_client=http_client
+                    ).__aenter__()
+                    read, write, _ = streams
+                    self._http_clients.append(http_client)
                 else:
                     params = StdioServerParameters(
                         command=spec["command"],
@@ -180,3 +246,10 @@ class McpManager:
             except Exception:  # noqa: BLE001
                 logger.warning("Error while closing an MCP session.", exc_info=True)
         self._sessions.clear()
+
+        for http_client in self._http_clients:
+            try:
+                await http_client.aclose()
+            except Exception:  # noqa: BLE001
+                logger.warning("Error while closing an MCP HTTP client.", exc_info=True)
+        self._http_clients.clear()

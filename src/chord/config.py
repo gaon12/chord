@@ -89,6 +89,9 @@ class Settings(BaseSettings):
     #: Kakao REST API key for Korean maps/places/navigation.
     kakao_rest_api_key: str = ""
 
+    #: Keenable live-web-search MCP API key (used via mcp.json header).
+    keenable_api_key: str = ""
+
 
 def load_settings(env_file: str | Path | None = None) -> Settings:
     """Load settings, raising an error that actually helps fix the problem.

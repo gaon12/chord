@@ -66,6 +66,41 @@ def test_broken_json_returns_empty(tmp_path):
     assert load_server_specs(config) == {}
 
 
+# -- ${VAR} expansion -----------------------------------------------------------------
+
+
+def test_env_placeholders_expanded_from_map(tmp_path):
+    config = tmp_path / "mcp.json"
+    config.write_text(
+        '{"mcpServers": {"keenable": {"url": "https://api.test/mcp", '
+        '"headers": {"X-API-Key": "${KEENABLE_API_KEY}"}}}}',
+        encoding="utf-8",
+    )
+    specs = load_server_specs(config, env={"KEENABLE_API_KEY": "keen_secret"})
+    assert specs["keenable"]["headers"]["X-API-Key"] == "keen_secret"
+
+
+def test_unset_placeholder_left_as_is(tmp_path):
+    config = tmp_path / "mcp.json"
+    config.write_text(
+        '{"mcpServers": {"s": {"url": "https://x/${MISSING_VAR}"}}}',
+        encoding="utf-8",
+    )
+    specs = load_server_specs(config, env={})
+    assert specs["s"]["url"] == "https://x/${MISSING_VAR}"
+
+
+def test_real_environment_used_as_fallback(tmp_path, monkeypatch):
+    config = tmp_path / "mcp.json"
+    config.write_text(
+        '{"mcpServers": {"s": {"command": "run", "args": ["${MY_TOKEN}"]}}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MY_TOKEN", "from-env")
+    specs = load_server_specs(config, env={})
+    assert specs["s"]["args"] == ["from-env"]
+
+
 # -- Tool adapter ---------------------------------------------------------------------
 
 

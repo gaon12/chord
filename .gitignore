@@ -4,6 +4,9 @@
 .env.*
 !.env.sample
 
+# Local MCP server config may contain real endpoints/keys via ${VARS}.
+mcp.json
+
 # --- Python ----------------------------------------------------------------
 __pycache__/
 *.py[cod]
