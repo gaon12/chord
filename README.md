@@ -28,7 +28,11 @@ tools when a question needs real-world data.
 | URL safety | `check_url_safety` | Google Safe Browsing cache (lrl.kr) + Cloudflare 1.1.1.2 + Radar scan | Cloudflare DNS works key-less |
 | Summarize | `summarize_text` | your configured LLM | - |
 | Translate | `translate_text` | your configured LLM | - |
-| ELI5 explainer | `explain_eli5` | your configured LLM | - |
+| ELI5 explainer | `explain_eli5` | your configured LLM (audience-calibrated) | - |
+| Crypto prices | `get_crypto_price` | Upbit public ticker | - (key-less) |
+| Wikipedia | `get_wiki_summary` | Korean Wikipedia API | - (key-less) |
+| News headlines | `get_news` | 연합뉴스 RSS · Google News RSS | - (key-less) |
+| Random utilities | `random_pick` | dice / coin / number / pick / shuffle | - |
 
 Everything works **without any API keys** except the URL shortener; optional
 keys unlock the official/premium providers listed above.
@@ -97,6 +101,7 @@ python -m chord        # or just `chord`, both start the bot
   The LLM decides which skills to call; you can also ask naturally:
   *"5 km를 마일로 바꿔줘"*, *"지금 뉴욕 시간 몇 시야?"*, *"KE801 항공편 어디까지 왔어?"*
 * `!help` - show usage.
+* `!usage` - show remaining API quotas per provider.
 * `!reset` - clear this channel's conversation memory.
 
 Conversations are kept per channel **in memory only** - restarting the bot
@@ -118,9 +123,20 @@ never live in the config file:
       "url": "https://api.keenable.ai/mcp",
       "headers": {"X-API-Key": "${KEENABLE_API_KEY}"}
     },
-    "fetch": {
-      "command": "uvx",
-      "args": ["mcp-server-fetch"]
+    "korean-law": {
+      "url": "https://mcp.gomdori.app/law"
+    },
+    "playwright": {
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "@playwright/mcp@latest"]
+    },
+    "sqlite": {
+      "command": ".venv/Scripts/python.exe",
+      "args": ["tools/sqlite_mcp_server.py", "--db-path", "chord.db"]
+    },
+    "rhwp": {
+      "command": "tools/rhwp/rhwp/rhwp.exe",
+      "args": ["mcp-serve"]
     }
   }
 }
@@ -131,10 +147,33 @@ bot gains **live web search** (`keenable_search_web_pages`,
 `keenable_fetch_page_content`) and answers questions about recent releases,
 prices and docs from fresh, sourced results instead of model memory.
 
+The other bundled servers:
+
+* **korean-law** - 12 tools over 법제처 APIs: statute/precedent search,
+  law text, citation verification (환각 방지), 조례 정비 레이더 등. Public
+  server is quota-shared; append `?oc=<your key>` from
+  <https://open.law.go.kr> for an own credential.
+* **playwright** (`@playwright/mcp`) - browser automation: navigate,
+  snapshot, click, fill forms, screenshot. Great for JS-rendered pages.
+  First run downloads the package; browsers install on demand via
+  `npx playwright install chromium`.
+* **sqlite** (`tools/sqlite_mcp_server.py`, in-repo) - `db_tables` /
+  `db_query` / `db_execute` against `chord.db`, giving the LLM a small
+  persistent memory it can create tables in.
+* **rhwp** - HWP/HWPX reading, searching, form filling and PDF/text/SVG
+  export (100+ tools). Install the release binary into
+  `tools/rhwp/rhwp/rhwp.exe` from
+  <https://github.com/edwardkim/rhwp/releases> (the config path above
+  expects exactly that).
+
 Every tool those servers expose is registered next to the built-in skills
 (namespaced as `<server>_<tool>`), and the same tool-calling loop drives them.
 Set `MCP_ENABLED=false` to skip MCP entirely. A failing server is skipped at
 startup - it never blocks the bot.
+
+**Hot reload**: a background task re-reads `mcp.json` every 30 minutes;
+add, remove or edit servers and they are swapped in automatically -
+no restart needed.
 
 ---
 
