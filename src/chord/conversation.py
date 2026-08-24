@@ -10,6 +10,31 @@ from __future__ import annotations
 from collections import defaultdict
 
 
+def next_turn_start(history: list[dict], minimum: int) -> int:
+    """First index at or after ``minimum`` that starts a user turn.
+
+    Every turn begins with the user's message and may be followed by
+    assistant/tool round-trips that only make sense together: a tool
+    result without the assistant message that requested it is invalid to
+    send back. Gemini rejects exactly that case with
+
+        400 - contents[0].parts[0].function_response.name:
+              Name cannot be empty
+
+    so a trim must land on a user message and drop whole turns.
+
+    Returns 0 - keep everything - when no boundary exists past
+    ``minimum``, which means the tail is a single unusually long turn.
+    Briefly exceeding the cap beats sending a broken conversation, and
+    the overshoot is bounded because a turn is capped by the engine's
+    tool-round limit.
+    """
+    for index in range(minimum, len(history)):
+        if history[index].get("role") == "user":
+            return index
+    return 0
+
+
 class ConversationStore:
     """Remembers recent messages for each Discord channel."""
 
@@ -25,12 +50,14 @@ class ConversationStore:
         """Add messages to a channel, trimming old ones beyond the limit.
 
         Trimming keeps memory bounded and requests small; the most
-        recent context is what matters for a chat anyway.
+        recent context is what matters for a chat anyway. It always cuts
+        on a turn boundary - see :func:`next_turn_start`.
         """
         channel_history = self._channels[channel_id]
         channel_history.extend(messages)
-        if len(channel_history) > self._max:
-            del channel_history[: len(channel_history) - self._max]
+        excess = len(channel_history) - self._max
+        if excess > 0:
+            del channel_history[: next_turn_start(channel_history, excess)]
 
     def reset(self, channel_id: int) -> None:
         """Forget everything said in one channel."""
