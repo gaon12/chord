@@ -525,3 +525,63 @@ def test_no_warning_when_reasoning_is_deliberately_off():
 
 def test_reasoning_is_advertised_in_help():
     assert "/reasoning" in HELP_TEXT
+
+
+# -- Leaked chain-of-thought -------------------------------------------------------
+
+
+def test_thought_block_is_removed_from_the_reply():
+    """gemma-4-31b-it narrates its reasoning inline before answering."""
+    raw = "<thought>The user greeted me in Korean.\nI should be brief.</thought>안녕하세요!"
+    assert format_reply(raw) == "안녕하세요!"
+
+
+def test_think_tag_variants_and_casing_are_handled():
+    assert format_reply("<THINK>hmm</THINK>42") == "42"
+    assert format_reply("<Reasoning>x</Reasoning>ok") == "ok"
+    assert format_reply('<think id="1">x</think>ok') == "ok"
+
+
+def test_unclosed_thought_tag_drops_the_rest():
+    """A cut-off answer must not dump half a monologue into the channel."""
+    assert format_reply("Here you go.\n<thought>wait, actually") == "Here you go."
+
+
+def test_orphan_closing_tag_drops_what_came_before():
+    assert format_reply("rambling on and on</thought>The answer is 42.") == "The answer is 42."
+
+
+def test_code_fences_keep_literal_reasoning_tags():
+    """Explaining <think> tags in a snippet is content, not reasoning."""
+    raw = "Use this:\n```html\n<think>example</think>\n```"
+    result = format_reply(raw)
+    assert "<think>example</think>" in result
+
+
+def test_thought_only_answer_is_kept_rather_than_blanked():
+    """A leaked thought still beats sending nothing."""
+    raw = "<thought>I have no idea what to say.</thought>"
+    assert "no idea" in format_reply(raw)
+
+
+def test_ordinary_answers_are_untouched():
+    assert format_reply("  Seoul is 23°C right now.  ") == "Seoul is 23°C right now."
+
+
+def test_mismatched_tags_do_not_close_each_other():
+    result = format_reply("<thought>a</think>b")
+    assert "b" in result
+
+
+async def test_leaked_reasoning_never_reaches_the_channel():
+    bot, engine = _bot()
+    channel = FakeChannel()
+
+    async def reply(user_text, history):
+        return ("<thought>thinking…</thought>Hi!", [{"role": "user", "content": user_text}])
+
+    engine.reply = reply
+
+    await bot.on_message(FakeMessage("<@999> hi", channel, mentions=[FakeUser(999)], guild="g"))
+
+    assert channel.sent == ["Hi!"]
