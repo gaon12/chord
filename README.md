@@ -103,16 +103,30 @@ clears them, and nothing is persisted.
 
 ## MCP tools
 
-Copy `mcp.json.sample` to `mcp.json` and list servers:
+Copy `mcp.json.sample` to `mcp.json` and list servers. String values may
+reference environment variables as `${VAR_NAME}` - resolved from real
+environment variables and from `.env` settings (e.g. API keys) - so secrets
+never live in the config file:
 
 ```json
 {
   "mcpServers": {
-    "fetch": {"command": "uvx", "args": ["mcp-server-fetch"]},
-    "remote-example": {"url": "https://example.com/mcp"}
+    "keenable": {
+      "url": "https://api.keenable.ai/mcp",
+      "headers": {"X-API-Key": "${KEENABLE_API_KEY}"}
+    },
+    "fetch": {
+      "command": "uvx",
+      "args": ["mcp-server-fetch"]
+    }
   }
 }
 ```
+
+With the `keenable` server configured (`KEENABLE_API_KEY=...` in `.env`) the
+bot gains **live web search** (`keenable_search_web_pages`,
+`keenable_fetch_page_content`) and answers questions about recent releases,
+prices and docs from fresh, sourced results instead of model memory.
 
 Every tool those servers expose is registered next to the built-in skills
 (namespaced as `<server>_<tool>`), and the same tool-calling loop drives them.
