@@ -318,3 +318,37 @@ async def test_registry_unregister_roundtrip():
     assert registry.unregister("dummy") is True
     assert registry.unregister("dummy") is False
     assert "dummy" not in registry
+
+
+# -- Cross-platform command resolution ------------------------------------------------
+
+
+def test_resolve_command_wraps_node_launchers_on_windows():
+    from chord.mcp_client import resolve_command
+
+    assert resolve_command("npx", ["-y", "pkg"], windows=True) == (
+        "cmd",
+        ["/c", "npx", "-y", "pkg"],
+    )
+    # Real executables are never wrapped.
+    assert resolve_command("tools/x.exe", [], windows=True) == ("tools/x.exe", [])
+
+
+def test_resolve_command_passthrough_on_posix():
+    from chord.mcp_client import resolve_command
+
+    assert resolve_command("npx", ["-y", "pkg"], windows=False) == ("npx", ["-y", "pkg"])
+
+
+def test_python_placeholder_expands_to_running_interpreter(tmp_path):
+    import sys as _sys
+
+    from chord.mcp_client import load_server_specs
+
+    config = tmp_path / "mcp.json"
+    config.write_text(
+        '{"mcpServers": {"s": {"command": "${PYTHON}", "args": ["server.py"]}}}',
+        encoding="utf-8",
+    )
+    specs = load_server_specs(config)
+    assert specs["s"]["command"] == _sys.executable

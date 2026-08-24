@@ -28,6 +28,7 @@ import json
 import logging
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -103,6 +104,30 @@ def extract_text(call_result: Any) -> str:
     return ""
 
 
+#: Node-based launchers that need a cmd.exe shim on Windows because the
+#: bare names are .ps1/.cmd shims blocked by execution policies.
+_NODE_LAUNCHERS = {"npx", "npm"}
+
+
+def resolve_command(
+    command: str,
+    args: list[str],
+    *,
+    windows: bool | None = None,
+) -> tuple[str, list[str]]:
+    """Make stdio commands portable across operating systems.
+
+    On Windows, bare ``npx``/``npm`` resolve to .ps1 shims that
+    subprocess spawning cannot execute; they are transparently wrapped
+    as ``cmd /c <name> ...``. On POSIX everything passes through.
+    ``windows`` overrides platform detection (for tests).
+    """
+    is_windows = (os.name == "nt") if windows is None else windows
+    if is_windows and Path(command).stem.lower() in _NODE_LAUNCHERS:
+        return "cmd", ["/c", command, *args]
+    return command, args
+
+
 def load_server_specs(
     config_path: Path,
     env: dict[str, str] | None = None,
@@ -124,6 +149,9 @@ def load_server_specs(
         return {}
 
     merged_env = {**os.environ, **(env or {})}
+    # ${PYTHON} always resolves to the running interpreter, keeping
+    # in-repo stdio servers portable across venv layouts.
+    merged_env.setdefault("PYTHON", sys.executable)
     servers = data.get("mcpServers") or {}
     valid: dict[str, dict] = {}
     for name, spec in servers.items():
@@ -283,9 +311,11 @@ class McpManager:
                 http_client = create_mcp_http_client(headers=headers)
                 cm = streamable_http_client(spec["url"], http_client=http_client)
             else:
+                raw_command, raw_args = spec["command"], list(spec.get("args", []))
+                command, command_args = resolve_command(raw_command, raw_args)
                 params = StdioServerParameters(
-                    command=spec["command"],
-                    args=spec.get("args", []),
+                    command=command,
+                    args=command_args,
                     env=spec.get("env"),
                 )
                 cm = stdio_client(params)
