@@ -16,10 +16,6 @@
     "sqlite": {
       "command": ".venv/Scripts/python.exe",
       "args": ["tools/sqlite_mcp_server.py", "--db-path", "chord.db"]
-    },
-    "rhwp": {
-      "command": "tools/rhwp/rhwp/rhwp.exe",
-      "args": ["mcp-serve"]
     }
   }
 }

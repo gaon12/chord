@@ -49,7 +49,31 @@ Rules:
 | `korean-law` | 12 legal tools over 법제처 APIs (statutes, precedents, citation verification) | public server is rate-shared; append `?oc=<key>` from open.law.go.kr for an own credential |
 | `playwright` | browser automation: navigate / snapshot / click / screenshot | first run downloads the package; browsers via `npx playwright install chromium` |
 | `sqlite` | persistent memory for the LLM (`db_tables` / `db_query` / `db_execute` on `chord.db`) | runs inside the project venv, zero extra installs |
-| `rhwp` | HWP/HWPX reading, searching, form filling, PDF/text/SVG export | download a release binary from <https://github.com/edwardkim/rhwp/releases>; Windows path expected at `tools/rhwp/rhwp/rhwp.exe`, macOS/Linux adjust `command` accordingly |
+| `rhwp` | HWP/HWPX reading, searching, form filling, PDF/text/SVG export | **not enabled by default** - see below |
+
+### rhwp (opt-in)
+
+`rhwp` exposes **82 tools**, which on its own more than doubles what is
+sent to the model on every request: 63 tools cost ~6 356 prompt tokens,
+adding rhwp takes that to ~15 303 - 96% of the Gemini free tier's 16 000
+input tokens per minute. One message then leaves no budget for the next,
+and the provider answers 429. Because the cost is paid on every message
+whether or not anyone opens an HWP file, it ships disabled.
+
+Enable it when you actually work with HWP documents, ideally alongside a
+paid tier or a trimmed `mcp.json`. Download a release binary from
+<https://github.com/edwardkim/rhwp/releases> and add:
+
+```json
+"rhwp": {
+  "command": "tools/rhwp/rhwp/rhwp.exe",
+  "args": ["mcp-serve"]
+}
+```
+
+The Windows path above matches the release layout; on macOS/Linux point
+`command` at the extracted binary. Relative paths are fine - they are
+resolved before spawning.
 
 ## Lifecycle
 

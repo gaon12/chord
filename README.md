@@ -170,11 +170,33 @@ Mentioning the bot's *role* instead of the bot user works too - that is
 what Discord's autocomplete usually inserts. `@everyone` and `@here` are
 deliberately ignored.
 
-**Replies take forever or never come.** Each MCP server adds its tools to
-every request; with several servers connected the model may be choosing
-between a hundred-plus tools. Trim `mcp.json`, or set `MCP_ENABLED=false`
-to measure without it. Requests are capped by `LLM_TIMEOUT_SECONDS`, after
-which the bot says so instead of staying silent.
+**Replies take 20-30 seconds, or the bot says it hit a usage limit.**
+Almost always the input-token rate limit, not a slow model. Every tool
+definition is re-sent with **every** request, and a turn that calls tools
+sends the whole catalog again each round. Measured on this project with
+`usage.prompt_tokens`:
+
+| Tools offered | Schema size | Prompt tokens per request |
+|---|---|---|
+| 24 (built-in only) | 11 341 chars | 3 490 |
+| 63 (default `mcp.json`) | 22 427 chars | 6 356 |
+| 145 (with an 82-tool server) | 47 677 chars | 15 303 |
+
+The Gemini free tier allows **16 000 input tokens per minute**, so at 145
+tools a *single* greeting used 96% of the minute's budget and the next
+request got:
+
+```
+429 - Quota exceeded for metric: generate_content_free_tier_input_token_count,
+limit: 16000 ... Please retry in 18.4s
+```
+
+The SDK retries that with backoff, which is where the 20-30 second replies
+come from. Fix it by trimming `mcp.json` rather than by waiting: the bot
+warns at startup when its catalog is big enough to matter, and
+`LOG_LEVEL=DEBUG` prints the actual token count of every request. Requests
+are also capped by `LLM_TIMEOUT_SECONDS`, after which the bot says so
+instead of staying silent.
 
 **An MCP server is missing from the tool list.** A server that fails to
 start is skipped with a warning so it cannot take the bot down - check
@@ -206,14 +228,15 @@ never live in the config file:
     "sqlite": {
       "command": ".venv/Scripts/python.exe",
       "args": ["tools/sqlite_mcp_server.py", "--db-path", "chord.db"]
-    },
-    "rhwp": {
-      "command": "tools/rhwp/rhwp/rhwp.exe",
-      "args": ["mcp-serve"]
     }
   }
 }
 ```
+
+These four expose 39 tools, ~6 400 prompt tokens on top of the built-in
+skills. Every server you add is charged on every message, so weigh new
+ones against your provider's input-token rate limit - see
+[Troubleshooting](#troubleshooting).
 
 With the `keenable` server configured (`KEENABLE_API_KEY=...` in `.env`) the
 bot gains **live web search** (`keenable_search_web_pages`,
@@ -233,11 +256,14 @@ The other bundled servers:
 * **sqlite** (`tools/sqlite_mcp_server.py`, in-repo) - `db_tables` /
   `db_query` / `db_execute` against `chord.db`, giving the LLM a small
   persistent memory it can create tables in.
+Not enabled by default:
+
 * **rhwp** - HWP/HWPX reading, searching, form filling and PDF/text/SVG
-  export (100+ tools). Install the release binary into
-  `tools/rhwp/rhwp/rhwp.exe` from
-  <https://github.com/edwardkim/rhwp/releases> (the config path above
-  expects exactly that).
+  export. Excellent tools, but **82 of them**: adding it takes a request
+  from ~6 400 to ~15 300 prompt tokens, which alone exceeds the Gemini
+  free tier's 16 000-per-minute input budget after a single message. Turn
+  it on when you actually work with HWP files - see
+  [docs/MCP.md](docs/MCP.md#rhwp-opt-in) for the snippet and the binary.
 
 Every tool those servers expose is registered next to the built-in skills
 (namespaced as `<server>_<tool>`), and the same tool-calling loop drives them.
