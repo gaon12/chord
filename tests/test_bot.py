@@ -82,7 +82,10 @@ class FakeMessage:
 
 
 class FakeUser:
-    """Stands in for the bot's own client user."""
+    """Stands in for a Discord user (bot or human)."""
+
+    def __init__(self, user_id: int = 999):
+        self.id = user_id
 
 
 def _bot() -> tuple[ChordBot, StubEngine]:
@@ -93,7 +96,7 @@ def _bot() -> tuple[ChordBot, StubEngine]:
     )
     engine = StubEngine()
     bot = ChordBot(settings=settings, engine=engine)
-    bot.me = FakeUser()
+    bot._me_id = 999
     return bot, engine
 
 
@@ -191,7 +194,7 @@ def test_format_reply_is_passthrough_for_simple_text():
 async def test_replies_when_mentioned_in_guild():
     bot, engine = _bot()
     channel = FakeChannel()
-    msg = FakeMessage("<@999> hello", channel, mentions=[bot.me], guild="g")
+    msg = FakeMessage("<@999> hello", channel, mentions=[FakeUser(999)], guild="g")
 
     await bot.on_message(msg)
 
@@ -231,7 +234,7 @@ async def test_mention_only_message_shows_help():
     bot, _ = _bot()
     channel = FakeChannel()
 
-    await bot.on_message(FakeMessage("<@999>", channel, mentions=[bot.me]))
+    await bot.on_message(FakeMessage("<@999>", channel, mentions=[FakeUser(999)]))
 
     assert "chat with me" in channel.sent[0]
 
@@ -245,7 +248,7 @@ async def test_engine_failure_sends_friendly_error():
 
     engine.reply = boom
 
-    await bot.on_message(FakeMessage("<@999> hi", channel, mentions=[bot.me]))
+    await bot.on_message(FakeMessage("<@999> hi", channel, mentions=[FakeUser(999)]))
 
     assert channel.sent == ["Sorry — something went wrong on my side."]
 
@@ -254,8 +257,8 @@ async def test_history_is_passed_to_engine_and_updated():
     bot, engine = _bot()
     channel = FakeChannel()
 
-    await bot.on_message(FakeMessage("<@999> one", channel, mentions=[bot.me]))
-    await bot.on_message(FakeMessage("<@999> two", channel, mentions=[bot.me]))
+    await bot.on_message(FakeMessage("<@999> one", channel, mentions=[FakeUser(999)]))
+    await bot.on_message(FakeMessage("<@999> two", channel, mentions=[FakeUser(999)]))
 
     _, history_on_second = engine.calls[1]
     assert any(m.get("content") == "one" for m in history_on_second)
@@ -281,7 +284,7 @@ async def test_reply_to_bot_message_triggers_response():
     msg = FakeMessage(
         "<@999> explain this",
         channel,
-        mentions=[bot.me],
+        mentions=[FakeUser(999)],
         guild="g",
         reference=reference,
     )
@@ -309,7 +312,9 @@ async def test_persona_refreshes_on_each_message():
 
     StubEngine.system_prompt = property(capture_get, capture_set)
     try:
-        await bot.on_message(FakeMessage("<@999> hi", FakeChannel(), mentions=[bot.me], guild="g"))
+        await bot.on_message(
+            FakeMessage("<@999> hi", FakeChannel(), mentions=[FakeUser(999)], guild="g")
+        )
         assert len(captured) >= 1  # system prompt was set from persona
     finally:
         del StubEngine.system_prompt

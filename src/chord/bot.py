@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import Any
 
 import discord
 from discord import app_commands
@@ -174,7 +175,8 @@ class ChordBot(discord.Client):
         intents.message_content = True
         super().__init__(intents=intents)
 
-        self.me: discord.ClientUser | None = None
+        # Set in on_ready from self.user; used for mention matching.
+        self._me_id: int | None = None
         self.tree = app_commands.CommandTree(self)
 
         self._settings = settings
@@ -320,24 +322,45 @@ class ChordBot(discord.Client):
     # -- Events -----------------------------------------------------------------
 
     async def on_ready(self) -> None:
-        self.me = self.user
-        logger.info("Logged in as %s (id=%s)", self.user, self.user and self.user.id)
+        self._me_id = getattr(self.user, "id", None)
+        logger.info("Logged in as %s (id=%s)", self.user, self._me_id)
 
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot:
             return
+
         if not self._should_reply(message):
             return
+
+        logger.debug(
+            "Processing message from %s in channel %s: %r",
+            message.author,
+            message.channel.id,
+            message.content[:100],
+        )
 
         user_text = clean_message_text(message.content)
         reply_context = build_reply_context(message)
 
-        if not user_text and not reply_context:
-            await message.channel.send(HELP_TEXT)
+        if not user_text.strip() and not reply_context.strip():
+            # Bot was mentioned but content is empty - almost certainly
+            # means Message Content Intent is not enabled in the portal.
+            if message.guild is not None:
+                logger.warning(
+                    "Mention received but content is empty. "
+                    "Enable 'Message Content Intent' in the Developer Portal "
+                    "(Bot -> Privileged Gateway Intents)."
+                )
+                await message.channel.send(
+                    "멘션은 받았는데 메시지 내용을 읽을 수 없어요. "
+                    "Developer Portal에서 **Message Content Intent**를 활성화해 주세요."
+                )
+            else:
+                await message.channel.send(HELP_TEXT)
             return
 
         # Build the full prompt including reply context.
-        prompt_text = reply_context + user_text if reply_context else user_text
+        prompt_text = f"{reply_context}{user_text}" if reply_context else user_text
         if not prompt_text.strip():
             await message.channel.send(HELP_TEXT)
             return
@@ -365,15 +388,29 @@ class ChordBot(discord.Client):
 
     # -- Internals ---------------------------------------------------------------
 
+    def _is_me(self, user: Any) -> bool:
+        """Check if a user object is this bot (race-safe: ID-based)."""
+        me_id = self._me_id or getattr(self.user, "id", None)
+        if me_id is None or user is None:
+            return False
+        return getattr(user, "id", None) == me_id
+
     def _should_reply(self, message: discord.Message) -> bool:
         """Answer DMs, server mentions, and replies to bot messages."""
         if message.guild is None:
             return True
-        if self.me in (message.mentions or []):
+
+        # Check mentions by user ID.
+        my_id = self._me_id or getattr(self.user, "id", None)
+        mentioned_ids = {getattr(u, "id", None) for u in (message.mentions or [])}
+        if my_id is not None and my_id in mentioned_ids:
             return True
+
+        # Check if replying to one of our messages.
         ref = getattr(message, "reference", None)
         resolved = getattr(ref, "resolved", None)
-        return resolved is not None and getattr(resolved, "author", None) == self.me
+        resolved_author_id = getattr(getattr(resolved, "author", None), "id", None)
+        return my_id is not None and resolved_author_id == my_id
 
 
 def build_bot(settings: Settings) -> ChordBot:
