@@ -1,15 +1,19 @@
-"""ELI5 skill - explains anything, tuned to the audience.
+"""ELI5 skill - explains anything, tuned precisely to the audience.
 
 Modeled after the ELI5 concept (https://github.com/dreambigou/eli5):
-the same topic is explained differently for a 5-year-old, a manager,
-an engineer or your parents. The instruction makes the model calibrate
-five axes:
+the same topic lands differently for a 5-year-old, an engineer, your
+manager or your parents. The prompt makes the model work in three
+steps - identify the audience, calibrate five axes, then write in a
+fixed shape - instead of vaguely "being simple":
 
-* VOCABULARY - no jargon for kids, proper terms for engineers
-* ANALOGIES  - toys and playgrounds vs business outcomes
-* TONE       - playful for children, professional for directors
-* DEPTH      - short and sweet vs nuanced detail
-* FRAMING    - impact/risk for managers, UX for designers
+* VOCABULARY - zero unexplained jargon; terms defined inline when needed
+* ANALOGIES  - drawn from what that audience already knows and likes
+* TONE       - playful for kids, professional for executives, warm for family
+* DEPTH      - as short as understanding allows, not shorter
+* FRAMING    - impact/risk for managers, UX for designers, mechanics for engineers
+
+Optional output styles: ``short`` (<80 words), ``structured``
+(bullet points) and ``story`` (a tiny narrative).
 """
 
 from __future__ import annotations
@@ -20,21 +24,52 @@ from chord.skills._llm_transform import LLMSkill
 
 DEFAULT_AUDIENCE = "age 5"
 
-_INSTRUCTION_TEMPLATE = """You are an expert explainer. Explain the user's topic \
-or text so that exactly the right audience understands it.
+#: Output styles the model may be asked to follow.
+STYLES: dict[str, str] = {
+    "auto": "",
+    "short": "Keep the whole answer under 80 words.",
+    "structured": (
+        "Format as short bullet points: one core-idea bullet, two to "
+        "four explanation bullets, one takeaway bullet."
+    ),
+    "story": "Explain through a tiny story (under 120 words) with the takeaway at the end.",
+}
 
-First decide what the audience needs, then calibrate:
-- VOCABULARY: match their words; zero unexplained jargon.
-- ANALOGIES: use things they already know and love.
-- TONE: fit how they like to be spoken to.
-- DEPTH: as short as possible, but not shorter than understanding needs.
-- FRAMING: lead with what this audience cares about.
+_INSTRUCTION_TEMPLATE = """You are an elite explainer. Make the user's topic or text \
+genuinely understood by ONE specific audience - not simplified into \
+uselessness, not dumbed down, translated.
 
-Write in the same language the input is written in."""
+STEP 1 - AUDIENCE. Picture one concrete member of the audience and \
+what they already know, use daily and care about.
+
+STEP 2 - CALIBRATE five axes before writing:
+- VOCABULARY: match their words. Zero unexplained jargon; when a technical \
+term is unavoidable, define it inside parentheses in plain words.
+- ANALOGIES: build on things they already know and like. One strong analogy \
+carries the whole explanation - develop it, do not stack three weak ones.
+- TONE: how they like being spoken to. Playful for children, crisp and \
+professional for executives, warm for family. Never cringe, never condescending.
+- DEPTH: as short as real understanding allows - but not shorter.
+- FRAMING: open with what THIS audience cares about (impact and risk for a \
+manager, how it feels/works for a designer, mechanism for an engineer).
+
+STEP 3 - WRITE with this shape:
+1. The core idea in ONE sentence.
+2. The analogy, developed just enough to click.
+3. Two to four short passages that rebuild the real concept on top of \
+the analogy, each adding exactly one new piece.
+4. A single-line takeaway they could repeat to someone else.
+
+HARD RULES:
+- Write in the same language as the user's input.
+- No filler ("simply put", "as you know"), no hedging, no emoji spam.
+- Concrete beats abstract; use a number only when it truly helps.
+- If the input is a text rather than a topic, simplify THAT text while \
+preserving every claim's meaning."""
 
 
 def build_instruction(audience: str = DEFAULT_AUDIENCE) -> str:
-    """Render the system instruction, including the audience line."""
+    """Render the full system instruction for one audience."""
     return f"{_INSTRUCTION_TEMPLATE}\nThe audience is: {audience.strip() or DEFAULT_AUDIENCE}."
 
 
@@ -42,8 +77,9 @@ class Eli5Skill(LLMSkill):
     name = "explain_eli5"
     description = (
         "Explain a topic or simplify a text for a specific audience "
-        "(e.g. 'age 5', 'my manager', 'a designer', 'grandma'). Adapts "
-        "vocabulary, analogies, tone and depth to that audience."
+        "(e.g. 'age 5', 'my manager', 'a designer', 'grandma'). Calibrates "
+        "vocabulary, analogies, tone, depth and framing; optional styles: "
+        "'short', 'structured', 'story'."
     )
     instruction: ClassVar[str] = _INSTRUCTION_TEMPLATE
 
@@ -62,17 +98,32 @@ class Eli5Skill(LLMSkill):
                     "('my mom'). Default 'age 5'."
                 ),
             },
+            "style": {
+                "type": "string",
+                "enum": list(STYLES),
+                "description": (
+                    "Output shape: 'auto' (default), 'short' (<80 words), "
+                    "'structured' (bullets), 'story' (tiny narrative)."
+                ),
+            },
         },
         "required": ["topic_or_text"],
     }
 
-    async def run(self, topic_or_text: str, audience: str = DEFAULT_AUDIENCE) -> str:
+    async def run(
+        self,
+        topic_or_text: str,
+        audience: str = DEFAULT_AUDIENCE,
+        style: str = "auto",
+    ) -> str:
         if not topic_or_text.strip():
             return "Give me something to explain."
 
-        # The audience travels through extra_instruction so the shared
-        # class-level instruction stays immutable and thread-safe.
-        return await self.transform(
-            topic_or_text,
-            extra_instruction=f"The audience is: {audience.strip() or DEFAULT_AUDIENCE}.",
-        )
+        # Audience and style travel through extra_instruction so the
+        # shared class-level instruction stays immutable and thread-safe.
+        directives = [f"The audience is: {audience.strip() or DEFAULT_AUDIENCE}."]
+        style_directive = STYLES.get(style.strip().lower(), STYLES["auto"])
+        if style_directive:
+            directives.append(style_directive)
+
+        return await self.transform(topic_or_text, extra_instruction=" ".join(directives))
