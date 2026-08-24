@@ -122,10 +122,13 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         SystemExit: With a friendly message when required values are missing.
     """
     try:
-        if env_file is None:
-            settings = Settings(_env_file=None)  # type: ignore[call-arg]
-        else:
-            settings = Settings(_env_file=env_file)  # type: ignore[call-arg]
+        # When env_file is None, DON'T pass _env_file at all so
+        # pydantic-settings reads the default .env from model_config.
+        # Passing _env_file=None would explicitly DISABLE .env reading.
+        kwargs: dict = {}
+        if env_file is not None:
+            kwargs["_env_file"] = str(env_file)
+        settings = Settings(**kwargs)  # type: ignore[call-arg]
     except ValidationError as exc:
         missing = [str(err["loc"][0]) for err in exc.errors() if err["type"] == "missing"]
         raise SystemExit(

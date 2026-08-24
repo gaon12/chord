@@ -59,10 +59,14 @@ def test_settings_read_from_env_file(tmp_path):
     assert settings.mcp_enabled is False
 
 
-def test_load_settings_missing_value_prints_hint():
+def test_load_settings_missing_value_prints_hint(tmp_path, monkeypatch):
     """A missing token exits with a friendly hint instead of a traceback."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DISCORD_TOKEN", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
     with pytest.raises(SystemExit) as excinfo:
-        load_settings(env_file=None)
+        load_settings()
     message = str(excinfo.value)
     assert ".env.sample" in message
     assert "discord_token" in message
@@ -118,3 +122,24 @@ def test_discord_token_empty_also_validated(tmp_path):
     env_file = _write_env(tmp_path, "DISCORD_TOKEN=\nOPENAI_API_KEY=k\n")
     with pytest.raises(SystemExit, match="DISCORD_TOKEN is empty"):
         load_settings(env_file)
+
+
+def test_load_settings_without_arg_reads_default_dotenv(tmp_path, monkeypatch):
+    """Regression: load_settings() with no args must read .env file.
+
+    Previously, passing _env_file=None to Settings explicitly DISABLED
+    .env reading, so values in .env were silently ignored.
+    """
+
+    _write_env(
+        tmp_path,
+        "DISCORD_TOKEN=from-dotenv\nOPENAI_API_KEY=from-dotenv\n",
+    )
+    # Clear real environment variables so only .env provides values.
+    monkeypatch.delenv("DISCORD_TOKEN", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    settings = load_settings()  # no explicit env_file -> must use .env
+    assert settings.discord_token == "from-dotenv"
+    assert settings.openai_api_key == "from-dotenv"
