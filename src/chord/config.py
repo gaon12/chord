@@ -38,6 +38,9 @@ REASONING_EFFORT_BY_LEVEL: dict[str, str | None] = {
 #: build the /reasoning choices so code and command never drift apart.
 REASONING_LEVELS: tuple[str, ...] = tuple(REASONING_EFFORT_BY_LEVEL)
 
+#: Standard logging levels, accepted in any casing.
+LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+
 
 class Settings(BaseSettings):
     """Typed container for all configuration values."""
@@ -83,6 +86,13 @@ class Settings(BaseSettings):
         "Use the provided tools whenever they help you give a better answer, "
         "and keep replies short enough to be readable in a chat window."
     )
+
+    # -- Diagnostics ---------------------------------------------------------
+
+    #: Root logging level. DEBUG additionally logs why each message was
+    #: answered (or, for MCP, what each server exposed), which is the
+    #: fastest way to find out why the bot stayed quiet.
+    log_level: LogLevel = "INFO"
 
     # -- MCP (external tool servers) -----------------------------------------
 
@@ -144,6 +154,14 @@ class Settings(BaseSettings):
         """Accept 'NONE', ' Light ' and friends from hand-edited .env files."""
         if isinstance(value, str):
             return value.strip().lower()
+        return value
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _normalize_log_level(cls, value: object) -> object:
+        """Accept 'debug' as readily as 'DEBUG'."""
+        if isinstance(value, str):
+            return value.strip().upper()
         return value
 
     @property

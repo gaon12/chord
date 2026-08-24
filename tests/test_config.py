@@ -217,3 +217,19 @@ def test_llm_timeout_is_configurable():
 def test_non_positive_llm_timeout_is_rejected(bad):
     with pytest.raises(ValidationError):
         _minimal_settings(llm_timeout_seconds=bad)
+
+
+# -- Log level ------------------------------------------------------------------------
+
+
+def test_log_level_defaults_to_info():
+    assert _minimal_settings().log_level == "INFO"
+
+
+def test_log_level_is_case_insensitive():
+    assert _minimal_settings(log_level="debug").log_level == "DEBUG"
+
+
+def test_unknown_log_level_is_rejected():
+    with pytest.raises(ValidationError):
+        _minimal_settings(log_level="chatty")
