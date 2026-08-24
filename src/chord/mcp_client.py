@@ -22,6 +22,7 @@ never take the whole bot down.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -158,24 +159,32 @@ def _expand_env_placeholders(value: Any, env_map: dict[str, str]) -> Any:
 
 
 class McpManager:
-    """Starts MCP sessions at startup and adapts their tools as skills."""
+    """Starts MCP sessions at startup and adapts their tools as skills.
+
+    Each server runs inside its own long-lived asyncio task that owns
+    the full context-manager lifecycle (transport -> session -> close).
+    This matters because MCP transports are anyio cancel scopes: they
+    must be entered and exited from the same task, and Discord's
+    ``setup_hook``/``close`` run in different tasks. ``stop()`` simply
+    signals the per-server stop event and joins its task.
+    """
 
     def __init__(self) -> None:
-        self._sessions: list[Any] = []
-        self._http_clients: list[Any] = []
+        self._servers: list[dict[str, Any]] = []
 
     def _env_map(self, settings: Settings) -> dict[str, str]:
         """Variables usable as ${VAR} inside mcp.json.
 
-        Real environment variables win; string-valued settings (API keys
-        loaded from .env) are exposed under their field names too.
+        String-valued settings (API keys loaded from .env) are exposed
+        under both their field name ('keenable_api_key') and their
+        conventional upper-case form ('KEENABLE_API_KEY').
         """
-        env_map = {
-            key: value
-            for key, value in settings.model_dump().items()
-            if isinstance(value, str) and value
-        }
-        return {**env_map}
+        env_map: dict[str, str] = {}
+        for key, value in settings.model_dump().items():
+            if isinstance(value, str) and value:
+                env_map[key] = value
+                env_map[key.upper()] = value
+        return env_map
 
     async def start(self, settings: Settings, register) -> int:
         """Connect to all servers and register their tools.
@@ -198,58 +207,94 @@ class McpManager:
         registered = 0
         for server_name, spec in specs.items():
             try:
-                if "url" in spec:
-                    # Custom headers (e.g. X-API-Key) ride on a dedicated
-                    # http client that we close again in stop().
-                    headers = spec.get("headers") or None
-                    http_client = create_mcp_http_client(headers=headers)
-                    streams = await streamable_http_client(
-                        spec["url"], http_client=http_client
-                    ).__aenter__()
-                    read, write, _ = streams
-                    self._http_clients.append(http_client)
-                else:
-                    params = StdioServerParameters(
-                        command=spec["command"],
-                        args=spec.get("args", []),
-                        env=spec.get("env"),
-                    )
-                    read, write = await stdio_client(params).__aenter__()
-
-                session = ClientSession(read, write)
-                await session.__aenter__()
-                await session.initialize()
-
-                tools_response = await session.list_tools()
-                for tool in tools_response.tools or []:
-                    register(McpTool(server_name, session, tool))
-                    registered += 1
-                self._sessions.append(session)
-                logger.info(
-                    "MCP server %s connected with %d tool(s).",
-                    server_name,
-                    len(tools_response.tools or []),
-                )
+                record = await self._launch(server_name, spec)
             except Exception as exc:  # noqa: BLE001 - one bad server != outage
-                logger.warning(
-                    "MCP server %s failed to start (%s) - skipped.",
-                    server_name,
-                    exc,
-                )
+                logger.warning("MCP server %s failed to start (%s) - skipped.", server_name, exc)
+                continue
+
+            session = record["session"]
+            for tool in record["tools"]:
+                register(McpTool(server_name, session, tool))
+                registered += 1
+            self._servers.append(record)
+            logger.info(
+                "MCP server %s connected with %d tool(s).",
+                server_name,
+                len(record["tools"]),
+            )
         return registered
 
-    async def stop(self) -> None:
-        """Close every live session, ignoring shutdown errors."""
-        for session in self._sessions:
-            try:
-                await session.__aexit__(None, None, None)
-            except Exception:  # noqa: BLE001
-                logger.warning("Error while closing an MCP session.", exc_info=True)
-        self._sessions.clear()
+    async def _launch(self, server_name: str, spec: dict) -> dict:
+        """Start one server in a dedicated task; returns when it is ready."""
+        ready: asyncio.Future = asyncio.get_running_loop().create_future()
+        stop_event = asyncio.Event()
+        task = asyncio.create_task(
+            self._serve(server_name, spec, ready, stop_event),
+            name=f"mcp-{server_name}",
+        )
 
-        for http_client in self._http_clients:
+        try:
+            session, tools = await ready
+        except BaseException:
+            task.cancel()
+            raise
+
+        return {
+            "name": server_name,
+            "task": task,
+            "stop": stop_event,
+            "session": session,
+            "tools": tools or [],
+        }
+
+    async def _serve(
+        self, server_name: str, spec: dict, ready: asyncio.Future, stop_event: asyncio.Event
+    ) -> None:
+        """Own one server's whole lifecycle inside this single task.
+
+        Everything uses plain ``async with`` blocks so the transports
+        (anyio cancel scopes) are entered AND exited here; the task then
+        parks on ``stop_event.wait()`` until shutdown is requested.
+        """
+        try:
+            if "url" in spec:
+                # Custom headers (e.g. X-API-Key) ride on a dedicated
+                # HTTP client scoped to this connection.
+                headers = spec.get("headers") or None
+                http_client = create_mcp_http_client(headers=headers)
+                cm = streamable_http_client(spec["url"], http_client=http_client)
+            else:
+                params = StdioServerParameters(
+                    command=spec["command"],
+                    args=spec.get("args", []),
+                    env=spec.get("env"),
+                )
+                cm = stdio_client(params)
+
+            async with cm as opened:
+                # mcp 2.x yields (read, write); 1.x also had get_session_id.
+                read, write = opened[0], opened[1]
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    tools_response = await session.list_tools()
+
+                    ready.set_result((session, list(tools_response.tools or [])))
+                    await stop_event.wait()
+                    # Leaving the async-with blocks shuts the transport
+                    # down cleanly inside this very task.
+        except BaseException as exc:  # noqa: BLE001 - reported via `ready`
+            if not ready.done():
+                ready.set_exception(exc)
+            elif not isinstance(exc, asyncio.CancelledError):
+                logger.warning("MCP server %s crashed: %s", server_name, exc)
+
+    async def stop(self) -> None:
+        """Signal every server task to shut down and wait for it."""
+        for record in self._servers:
+            record["stop"].set()
             try:
-                await http_client.aclose()
-            except Exception:  # noqa: BLE001
-                logger.warning("Error while closing an MCP HTTP client.", exc_info=True)
-        self._http_clients.clear()
+                await asyncio.wait_for(asyncio.shield(record["task"]), timeout=10)
+            except Exception:  # noqa: BLE001 - shutdown must never hang the bot
+                record["task"].cancel()
+                logger.warning("MCP server %s did not shut down cleanly.", record["name"])
+        self._servers.clear()
