@@ -21,6 +21,7 @@ from chord.skills.stock import StockPriceSkill
 from chord.skills.summarize import SummarizeSkill
 from chord.skills.translate import TranslateSkill
 from chord.skills.unit_convert import ConvertUnitsSkill
+from chord.skills.url_safety import CheckUrlSafetySkill
 from chord.skills.url_shortener import ExpandUrlSkill, ShortenUrlSkill
 from chord.skills.weather import WeatherSkill
 from chord.skills.web_search import WebSearchSkill
@@ -45,6 +46,7 @@ def create_default_registry(settings: Settings) -> SkillRegistry:
     registry.register(FlightSkill(settings))
     registry.register(ShortenUrlSkill(settings))
     registry.register(ExpandUrlSkill(settings))
+    registry.register(CheckUrlSafetySkill(settings))
     registry.register(FindPlacesSkill(settings))
     registry.register(GetDirectionsSkill(settings))
     registry.register(CurrentDatetimeSkill())

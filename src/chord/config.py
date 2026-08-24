@@ -92,6 +92,12 @@ class Settings(BaseSettings):
     #: Keenable live-web-search MCP API key (used via mcp.json header).
     keenable_api_key: str = ""
 
+    #: Cloudflare API token for Radar URL Scanner (optional URL checks).
+    cloudflare_api_key: str = ""
+
+    #: Cloudflare account ID that owns the Radar scanner token.
+    cloudflare_account_id: str = ""
+
     #: JSON file where provider usage counters are persisted.
     quota_store_path: Path = Path("usage.json")
 
