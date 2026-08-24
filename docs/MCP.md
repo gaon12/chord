@@ -35,6 +35,11 @@ Rules:
   portable across Windows/Linux/macOS venv layouts.
 * On Windows, bare node launchers (`npx`, `npm`) are auto-wrapped as
   `cmd /c npx ...`; write just `"npx"` everywhere.
+* A relative path command (`"tools/rhwp/rhwp.exe"`) is resolved against
+  the working directory before spawning. Windows' `CreateProcess`
+  rejects relative forward-slash paths and the server would otherwise
+  die with a confusing `[WinError 2] file not found`. Bare program names
+  are left alone so `PATH` lookup still applies.
 
 ## Bundled servers
 

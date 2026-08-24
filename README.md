@@ -74,6 +74,9 @@ Optional but recommended:
 ```ini
 OPENAI_BASE_URL=https://api.openai.com/v1   # any OpenAI-compatible server
 OPENAI_MODEL=gpt-4o-mini                    # model understood by that server
+REASONING_LEVEL=none                        # auto|none|light|medium|heavy
+LLM_TIMEOUT_SECONDS=120                     # give up on a stalled provider
+LOG_LEVEL=INFO                              # DEBUG explains every reply decision
 KMA_API_KEY=...                             # 기상청 weather for Korea
 AIRKOREA_API_KEY=...                        # 에어코리아 fine dust
 SWEETTRACKER_API_KEY=...                    # aggregated parcel tracking
@@ -101,10 +104,12 @@ python -m chord        # or just `chord`, both start the bot
 * **Chat**: mention the bot anywhere (`@chord 서울 날씨 어때?`) or DM it.
   The LLM decides which skills to call; you can also ask naturally:
   *"5 km를 마일로 바꿔줘"*, *"지금 뉴욕 시간 몇 시야?"*, *"KE801 항공편 어디까지 왔어?"*
-* `!help` - show usage.
-* `!usage` - show remaining API quotas per provider.
-* `!reminders` - list pending reminders in this channel.
-* `!reset` - clear this channel's conversation memory.
+* `/help` - show usage.
+* `/usage` - show remaining API quotas per provider.
+* `/reminders` - list pending reminders in this channel.
+* `/reset` - clear this channel's conversation memory.
+* `/persona` - view or reload the character definition.
+* `/reasoning` - view or change how hard the bot thinks before answering.
 
 **Reminders**: ask naturally — *"30분 후 라면 끓어라고 알려줘"* or *"8월 25일 오후 2시에 회의"*
 — and the bot posts the message back into the same channel at the right time.
@@ -113,6 +118,67 @@ very next message (no restart needed).
 
 Conversations are kept per channel **in memory only** - restarting the bot
 clears them, and nothing is persisted.
+
+### Reasoning level
+
+How much the model deliberates before replying is a setting, not a fixed
+provider behaviour:
+
+| Level    | `reasoning_effort` sent | Use it when |
+|----------|-------------------------|-------------|
+| `auto`   | *(nothing)*             | you want the provider's own default back |
+| `none`   | `minimal`               | **default** - chat, quick answers |
+| `light`  | `low`                   | occasional hard questions |
+| `medium` | `medium`                | balanced |
+| `heavy`  | `high`                  | analysis worth waiting for |
+
+Set `REASONING_LEVEL` in `.env` for the startup value, or `/reasoning
+<level>` to retune a running bot without dropping its MCP connections
+and conversation history.
+
+Models that have no notion of reasoning effort (`gpt-4o-mini`, most Gemma
+and local models) reject the parameter outright. The bot notices on the
+first request, logs a warning, and answers without it - so the setting is
+always safe to leave on. `/reasoning` reports when this has happened
+rather than showing a level that does nothing.
+
+Chain-of-thought that a model prints into its answer (`<thought>...`,
+`<think>...`) is stripped before sending, so the reasoning never reaches
+the channel. Text inside fenced code blocks is left alone.
+
+---
+
+## Troubleshooting
+
+**The bot ignores `@chord ...` in a server.** In order, check:
+
+1. The bot is online in the member list. If the process exits at
+   startup, the log says why.
+2. **Message Content Intent** is enabled in the Developer Portal
+   (*Bot → Privileged Gateway Intents*). Without it, mentions arrive
+   with empty text; the bot warns about this on startup and answers the
+   mention by telling you so.
+3. The bot can actually write in that channel. Missing *Send Messages*
+   used to make it look dead - it now logs
+   `Not allowed to send in channel <id>` instead.
+4. Set `LOG_LEVEL=DEBUG` in `.env` and watch the decision: every
+   answered message logs its trigger (`reason=user-mention`,
+   `role-mention`, `mention-token`, `reply-to-bot`, `dm`). Chatty
+   libraries stay at INFO so your own lines remain readable.
+
+Mentioning the bot's *role* instead of the bot user works too - that is
+what Discord's autocomplete usually inserts. `@everyone` and `@here` are
+deliberately ignored.
+
+**Replies take forever or never come.** Each MCP server adds its tools to
+every request; with several servers connected the model may be choosing
+between a hundred-plus tools. Trim `mcp.json`, or set `MCP_ENABLED=false`
+to measure without it. Requests are capped by `LLM_TIMEOUT_SECONDS`, after
+which the bot says so instead of staying silent.
+
+**An MCP server is missing from the tool list.** A server that fails to
+start is skipped with a warning so it cannot take the bot down - check
+the startup log for `MCP server <name> failed to start`.
 
 ---
 

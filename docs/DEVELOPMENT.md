@@ -21,7 +21,7 @@ Copy `.env.sample` to `.env` and fill in `DISCORD_TOKEN` +
 python -m chord      # or: chord
 ```
 
-`!usage` inside Discord shows remaining provider quotas at any time.
+`/usage` inside Discord shows remaining provider quotas at any time.
 
 ## Quality gates
 
