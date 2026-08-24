@@ -48,10 +48,10 @@ def clean_message_text(content: str) -> str:
 
 
 def split_message(text: str, limit: int = DISCORD_MESSAGE_LIMIT) -> list[str]:
-    """Split long text into sendable chunks.
+    """Split long text into sendable chunks without breaking markdown fences.
 
-    Prefers breaking at blank lines, then at newlines, then hard-slices.
-    Returns at least one chunk even for empty input.
+    Code blocks (```` ``` ````) are treated as atomic units — never split mid-fence.
+    Other text splits at blank lines or newlines.
     """
     text = text.strip()
     if not text:
@@ -59,29 +59,69 @@ def split_message(text: str, limit: int = DISCORD_MESSAGE_LIMIT) -> list[str]:
     if len(text) <= limit:
         return [text]
 
-    chunks: list[str] = []
-    for paragraph in text.split("\n\n"):
-        while len(paragraph) > limit:
-            head, paragraph = _hard_slice(paragraph, limit)
-            chunks.append(head)
-        if paragraph:
-            chunks.append(paragraph)
+    segments = _split_segments(text)
+    chunks = _merge_chunks(segments, limit)
+    return chunks
 
-    merged: list[str] = []
-    for chunk in chunks:
-        if merged and len(merged[-1]) + 2 + len(chunk) <= limit:
-            merged[-1] += "\n\n" + chunk
+
+def _split_segments(text: str) -> list[str]:
+    """Split text into paragraphs and intact code-fence blocks."""
+    segments: list[str] = []
+    buffer: list[str] = []
+    in_fence = False
+
+    def flush():
+        content = "\n".join(buffer).strip()
+        if content:
+            segments.append(content)
+        buffer.clear()
+
+    for line in text.split("\n"):
+        if line.strip().startswith("```"):
+            if in_fence:
+                buffer.append(line)
+                flush()  # close fence -> emit whole block
+                in_fence = False
+            else:
+                flush()
+                buffer.append(line)
+                in_fence = True
+        elif in_fence:
+            buffer.append(line)
+        elif not line.strip():
+            flush()
         else:
-            merged.append(chunk)
-    return merged
+            buffer.append(line)
+    flush()
+    return [s for s in segments if s]
 
 
-def _hard_slice(text: str, limit: int) -> tuple[str, str]:
-    """Cut ``text`` at ``limit``, preferring the last newline inside."""
-    cut = text.rfind("\n", 0, limit)
-    if cut <= 0:
-        cut = limit
-    return text[:cut].rstrip(), text[cut:].lstrip()
+def _merge_chunks(segments: list[str], limit: int) -> list[str]:
+    """Merge adjacent segments; hard-split any that exceed ``limit``."""
+    chunks: list[str] = []
+    for seg in segments:
+        if chunks and len(chunks[-1]) + 2 + len(seg) <= limit:
+            chunks[-1] += "\n\n" + seg
+            continue
+
+        if len(seg) > limit:
+            # Hard-split oversized segments at newline or space boundaries.
+            while len(seg) > limit:
+                cut = seg.rfind("\n", 0, limit)
+                if cut < limit // 2:
+                    cut = seg.rfind(" ", 0, limit)
+                if cut <= 0:
+                    cut = limit
+                chunks.append(seg[:cut].rstrip())
+                seg = seg[cut:].lstrip()
+            if seg:
+                if chunks and len(chunks[-1]) + 2 + len(seg) <= limit:
+                    chunks[-1] += "\n\n" + seg
+                else:
+                    chunks.append(seg)
+        else:
+            chunks.append(seg)
+    return [c for c in chunks if c]
 
 
 def build_reply_context(message: discord.Message) -> str:
