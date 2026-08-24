@@ -39,6 +39,10 @@ class SkillRegistry:
             raise ValueError(f"Duplicate skill name: {skill.name!r}")
         self._skills[skill.name] = skill
 
+    def unregister(self, name: str) -> bool:
+        """Remove a skill by name; returns True if it existed."""
+        return self._skills.pop(name, None) is not None
+
     def __len__(self) -> int:
         return len(self._skills)
 

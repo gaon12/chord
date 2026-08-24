@@ -16,6 +16,7 @@ import logging
 import re
 
 import discord
+from discord.ext import tasks
 
 from chord.config import Settings
 from chord.conversation import ConversationStore
@@ -121,13 +122,32 @@ class ChordBot(discord.Client):
         """Called once after login but before the gateway connects.
 
         MCP servers are started here so their tools are registered
-        before the first message arrives.
+        before the first message arrives, and a periodic loop keeps
+        them in sync with mcp.json edits at runtime.
         """
         registered = await self._mcp.start(self._settings, self._registry.register)
         if registered:
             logger.info("Registered %d MCP tool(s).", registered)
+        self._mcp_reload_loop.start()
+
+    @tasks.loop(minutes=30)
+    async def _mcp_reload_loop(self) -> None:
+        """Periodically re-read mcp.json and hot-reload on changes."""
+        try:
+            changed = await self._mcp.reload_if_changed(
+                self._settings, self._registry, self._registry.register
+            )
+            if changed:
+                logger.info("MCP tools refreshed from mcp.json.")
+        except Exception:  # noqa: BLE001 - a bad config must not kill the loop
+            logger.exception("MCP reload failed; keeping previous servers.")
+
+    @_mcp_reload_loop.before_loop
+    async def _wait_until_gateway_ready(self) -> None:
+        await self.wait_until_ready()
 
     async def close(self) -> None:
+        self._mcp_reload_loop.cancel()
         await self._mcp.stop()
         await super().close()
 

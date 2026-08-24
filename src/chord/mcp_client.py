@@ -23,6 +23,7 @@ never take the whole bot down.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -167,10 +168,24 @@ class McpManager:
     must be entered and exited from the same task, and Discord's
     ``setup_hook``/``close`` run in different tasks. ``stop()`` simply
     signals the per-server stop event and joins its task.
+
+    ``reload_if_changed()`` lets callers (a periodic Discord task) pick
+    up mcp.json edits at runtime without restarting the bot.
     """
 
     def __init__(self) -> None:
         self._servers: list[dict[str, Any]] = []
+        self._tool_names: list[str] = []
+        self._signature: str | None = None
+
+    def _config_signature(self, settings: Settings) -> str:
+        """Stable hash of the config content plus the enabled flag."""
+        path = Path(settings.mcp_config_path)
+        try:
+            content = path.read_bytes()
+        except OSError:
+            content = b""
+        return f"{settings.mcp_enabled}:{hashlib.sha256(content).hexdigest()}"
 
     def _env_map(self, settings: Settings) -> dict[str, str]:
         """Variables usable as ${VAR} inside mcp.json.
@@ -204,6 +219,8 @@ class McpManager:
         if not specs:
             return 0
 
+        self._signature = self._config_signature(settings)
+
         registered = 0
         for server_name, spec in specs.items():
             try:
@@ -214,7 +231,9 @@ class McpManager:
 
             session = record["session"]
             for tool in record["tools"]:
-                register(McpTool(server_name, session, tool))
+                adapter = McpTool(server_name, session, tool)
+                register(adapter)
+                self._tool_names.append(adapter.name)
                 registered += 1
             self._servers.append(record)
             logger.info(
@@ -298,3 +317,21 @@ class McpManager:
                 record["task"].cancel()
                 logger.warning("MCP server %s did not shut down cleanly.", record["name"])
         self._servers.clear()
+        self._tool_names.clear()
+
+    async def reload_if_changed(self, settings: Settings, registry, register) -> bool:
+        """Restart MCP servers when mcp.json changed since the last load.
+
+        Old tools are unregistered from ``registry`` first so stale tools
+        never linger. Returns True when a reload actually happened.
+        """
+        signature = self._config_signature(settings)
+        if signature == self._signature:
+            return False
+
+        logger.info("mcp.json changed - reloading MCP servers.")
+        for name in self._tool_names:
+            registry.unregister(name)
+        await self.stop()
+        await self.start(settings, register)
+        return True

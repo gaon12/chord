@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import chord.mcp_client as mcp_client
 from chord.config import Settings
 from chord.mcp_client import (
     McpManager,
@@ -200,3 +201,120 @@ async def test_manager_skips_failing_servers(monkeypatch, tmp_path):
 
     assert count == 0
     assert registered == []
+
+
+def _write_config(path, servers_json: str):
+    path.write_text('{"mcpServers": ' + servers_json + "}", encoding="utf-8")
+
+
+async def fake_serve(self, server_name, spec, ready, stop_event):
+    """Lifecycle stand-in: one tool per server, parks until stopped."""
+    from types import SimpleNamespace
+
+    session = SimpleNamespace(exited=False)
+
+    async def fake_exit(*exc):
+        session.exited = True
+
+    session.__aexit__ = fake_exit
+    from types import SimpleNamespace as NS
+
+    tool = NS(
+        name=f"{server_name}_tool",
+        description="fake",
+        inputSchema={"type": "object", "properties": {}, "required": []},
+    )
+    ready.set_result((session, [tool]))
+    await stop_event.wait()
+
+
+async def test_reload_detects_no_change_without_edit(tmp_path, monkeypatch):
+    config = tmp_path / "mcp.json"
+    _write_config(config, '{"a": {"command": "x"}}')
+    settings = Settings(
+        _env_file=None,
+        discord_token="t",
+        openai_api_key="k",
+        mcp_config_path=config,
+    )
+
+    monkeypatch.setattr(mcp_client.McpManager, "_serve", fake_serve)
+    manager = McpManager()
+
+    registered: list = []
+    await manager.start(settings, registered.append)
+    assert len(registered) == 1
+
+    changed = await manager.reload_if_changed(settings, {}, registered.append)
+
+    assert changed is False
+    assert len(registered) == 1  # nothing re-registered
+    await manager.stop()
+
+
+async def test_reload_swaps_tools_when_config_changes(tmp_path, monkeypatch):
+    config = tmp_path / "mcp.json"
+    _write_config(config, '{"a": {"command": "x"}}')
+    settings = Settings(
+        _env_file=None,
+        discord_token="t",
+        openai_api_key="k",
+        mcp_config_path=config,
+    )
+
+    monkeypatch.setattr(mcp_client.McpManager, "_serve", fake_serve)
+
+    # Config source controlled by the test.
+    servers = {"a": {"command": "x"}}
+    monkeypatch.setattr(
+        mcp_client,
+        "load_server_specs",
+        lambda path, env=None: {name: dict(spec) for name, spec in servers.items()},
+    )
+
+    manager = McpManager()
+
+    class RegistryLike(dict):
+        def unregister(self, name):
+            return self.pop(name, None) is not None
+
+    registry_like = RegistryLike()
+    registered: list = []
+
+    def register(skill):
+        registered.append(skill)
+        registry_like[skill.name] = skill
+
+    count = await manager.start(settings, register)
+    assert count == 1
+    assert [s.name for s in registered] == ["a_a_tool"]
+
+    # Simulate an edit adding a second server.
+    servers["b"] = {"url": "https://x.test/mcp"}
+    _write_config(config, '{"a": {"command": "x"}, "b": {"url": "https://x.test/mcp"}}')
+
+    changed = await manager.reload_if_changed(settings, registry_like, register)
+
+    assert changed is True
+    # Old 'a' instance was unregistered from the registry, then both
+    # servers registered fresh instances.
+    assert sorted(registry_like) == ["a_a_tool", "b_b_tool"]
+    assert registry_like["a_a_tool"] is not registered[0]  # fresh instance
+
+
+async def test_registry_unregister_roundtrip():
+    from chord.skills.base import Skill
+    from chord.skills.registry import SkillRegistry
+
+    class Dummy(Skill):
+        name = "dummy"
+
+        async def run(self):
+            return ""
+
+    registry = SkillRegistry()
+    dummy = Dummy()
+    registry.register(dummy)
+    assert registry.unregister("dummy") is True
+    assert registry.unregister("dummy") is False
+    assert "dummy" not in registry
