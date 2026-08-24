@@ -1,15 +1,25 @@
 {
   "mcpServers": {
-    "fetch": {
-      "command": "uvx",
-      "args": ["mcp-server-fetch"]
+    "keenable": {
+      "url": "https://api.keenable.ai/mcp",
+      "headers": {
+        "X-API-Key": "${KEENABLE_API_KEY}"
+      }
     },
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:/path/to/allowed/dir"]
+    "korean-law": {
+      "url": "https://mcp.gomdori.app/law"
     },
-    "remote-example": {
-      "url": "https://example.com/mcp"
+    "playwright": {
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "@playwright/mcp@latest"]
+    },
+    "sqlite": {
+      "command": ".venv/Scripts/python.exe",
+      "args": ["tools/sqlite_mcp_server.py", "--db-path", "chord.db"]
+    },
+    "rhwp": {
+      "command": "tools/rhwp/rhwp/rhwp.exe",
+      "args": ["mcp-serve"]
     }
   }
 }

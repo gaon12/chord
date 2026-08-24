@@ -10,6 +10,9 @@ mcp.json
 # Persisted API usage counters (runtime state).
 usage.json
 
+# Locally installed MCP server binaries (rhwp release download).
+tools/
+
 # --- Python ----------------------------------------------------------------
 __pycache__/
 *.py[cod]
