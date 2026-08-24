@@ -19,11 +19,13 @@ import discord
 from discord.ext import tasks
 
 from chord.config import Settings
+from chord.context import reset_current_channel, set_current_channel
 from chord.conversation import ConversationStore
 from chord.engine import ChatEngine
 from chord.llm import LLMService
 from chord.mcp_client import McpManager
 from chord.persona import PersonaProvider
+from chord.reminders import ReminderStore
 from chord.skills import create_default_registry
 from chord.skills._quota import get_quota_store, render_usage
 from chord.skills.registry import SkillRegistry
@@ -41,6 +43,7 @@ HELP_TEXT = (
     "in Seoul?`\n"
     "`!help`  - show this message\n"
     "`!usage` - show remaining API quotas\n"
+    "`!reminders - list pending reminders for this channel\n"
     "`!reset` - forget this channel's conversation"
 )
 
@@ -113,6 +116,7 @@ class ChordBot(discord.Client):
         self._settings = settings
         self._engine = engine
         self._persona = PersonaProvider(settings.persona_path)
+        self._reminders = ReminderStore(settings.reminder_db_path)
         self._store = ConversationStore()
         # The registry is kept so setup_hook can add MCP tools later;
         # the engine reads it live, so additions are picked up
@@ -131,6 +135,7 @@ class ChordBot(discord.Client):
         if registered:
             logger.info("Registered %d MCP tool(s).", registered)
         self._mcp_reload_loop.start()
+        self._reminder_loop.start()
 
     @tasks.loop(minutes=30)
     async def _mcp_reload_loop(self) -> None:
@@ -148,7 +153,50 @@ class ChordBot(discord.Client):
     async def _wait_until_gateway_ready(self) -> None:
         await self.wait_until_ready()
 
+    @tasks.loop(seconds=30)
+    async def _reminder_loop(self) -> None:
+        """Deliver reminders whose time has come."""
+        delivered = await self.deliver_due_reminders()
+        if delivered:
+            logger.info("Delivered %d reminder(s).", delivered)
+
+    @_reminder_loop.before_loop
+    async def _wait_until_gateway_ready_for_reminders(self) -> None:
+        await self.wait_until_ready()
+
+    def _resolve_channel(self, channel_id: int):
+        """Find a channel by id (cached guild channels first, then fetch)."""
+        channel = self.get_channel(channel_id)
+        return channel
+
+    async def deliver_due_reminders(self) -> int:
+        """Send every due reminder; returns how many were delivered."""
+        count = 0
+        for reminder in self._reminders.due():
+            try:
+                channel = self._resolve_channel(reminder.channel_id)
+                if channel is None:
+                    channel = await self.fetch_channel(reminder.channel_id)
+                local_due = reminder.due.astimezone()
+                await channel.send(
+                    f"⏰ Reminder: {reminder.text} (scheduled {local_due.strftime('%m-%d %H:%M')})"
+                )
+                self._reminders.mark_done(reminder.id)
+                count += 1
+            except Exception:  # noqa: BLE001 - one bad channel != stop all
+                logger.exception(
+                    "Could not deliver reminder #%s to channel %s",
+                    reminder.id,
+                    reminder.channel_id,
+                )
+        return count
+
+    @_mcp_reload_loop.before_loop
+    async def _wait_until_gateway_ready(self) -> None:
+        await self.wait_until_ready()
+
     async def close(self) -> None:
+        self._reminder_loop.cancel()
         self._mcp_reload_loop.cancel()
         await self._mcp.stop()
         await super().close()
@@ -177,6 +225,8 @@ class ChordBot(discord.Client):
         channel_id = message.channel.id
         # Persona edits land on the very next message - no restart.
         self._engine.system_prompt = self._persona.get()
+        # Skills like set_reminder need to know where we are.
+        token = set_current_channel(channel_id)
         async with message.channel.typing():
             try:
                 answer, new_messages = await self._engine.reply(
@@ -186,6 +236,8 @@ class ChordBot(discord.Client):
                 logger.exception("Chat failed in channel %s", channel_id)
                 await message.channel.send("Sorry - something went wrong on my side.")
                 return
+            finally:
+                reset_current_channel(token)
 
         self._store.append(channel_id, *new_messages)
         for chunk in split_message(answer):
@@ -202,7 +254,17 @@ class ChordBot(discord.Client):
     async def _handle_command(self, message: discord.Message) -> None:
         """Handle the plain-text commands the bot understands."""
         command = message.content.strip().lower()
-        if command == "!reset":
+        if command == "!reminders":
+            rows = self._reminders.pending_for_channel(message.channel.id)
+            if not rows:
+                await message.channel.send("No pending reminders in this channel.")
+                return
+            lines = [f"{len(rows)} pending reminder(s):"]
+            for row in rows:
+                local = row.due.astimezone().strftime("%m-%d %H:%M")
+                lines.append(f"#{row.id} {local} - {row.text}")
+            await message.channel.send("\n".join(lines))
+        elif command == "!reset":
             self._store.reset(message.channel.id)
             await message.channel.send("Conversation cleared.")
         elif command == "!usage":

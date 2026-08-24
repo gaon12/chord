@@ -7,8 +7,9 @@
 # Local MCP server config may contain real endpoints/keys via ${VARS}.
 mcp.json
 
-# Persisted API usage counters (runtime state).
+# Persisted runtime state.
 usage.json
+chord.db
 
 # Locally installed MCP server binaries (rhwp release download).
 tools/

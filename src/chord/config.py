@@ -104,6 +104,9 @@ class Settings(BaseSettings):
     #: Markdown file defining the bot's character (system prompt body).
     persona_path: Path = Path("persona.md")
 
+    #: SQLite database for reminders (also exposed via the sqlite MCP).
+    reminder_db_path: Path = Path("chord.db")
+
 
 def load_settings(env_file: str | Path | None = None) -> Settings:
     """Load settings, raising an error that actually helps fix the problem.
