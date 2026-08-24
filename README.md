@@ -222,28 +222,41 @@ adsbdb and DuckDuckGo lite have no published hard limits and are not metered.
 
 ---
 
-## Adding a skill (two lines)
+## Documentation
 
-1. Create `src/chord/skills/<name>.py`:
+| Doc | Contents |
+|---|---|
+| [docs/SKILLS.md](docs/SKILLS.md) | how to write a skill (drop-in plugin, injection, quota integration, testing) |
+| [docs/MCP.md](docs/MCP.md) | mcp.json format, `${VAR}`/`${PYTHON}` placeholders, bundled servers, hot reload |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | per-OS setup, quality gates, project layout, design rules, cross-platform notes |
+
+---
+
+## Adding a skill (one file)
+
+Create `src/chord/skills/<name>.py` - that is the whole installation:
 
 ```python
+from typing import ClassVar
+
 from chord.skills.base import Skill
+
 
 class MySkill(Skill):
     name = "my_tool"
     description = "Tell the model WHEN to use this - that is the quality lever."
-    parameters = {"type": "object", "properties": {"x": {"type": "string"}}, "required": ["x"]}
+    parameters: ClassVar[dict] = {"type": "object", "properties": {"x": {"type": "string"}}, "required": ["x"]}
 
     async def run(self, x: str) -> str:
         return f"you said {x}"
 ```
 
-2. Register it in `create_default_registry()` inside
-   `src/chord/skills/__init__.py`.
-
-That is it: the registry turns it into an OpenAI tool definition and the chat
-loop can call it. HTTP-based helpers live in `skills/_http.py` (JSON/text GET
-with sane errors), city geocoding in `skills/_geo.py`.
+The registry auto-discovers every `*Skill` class in this package and
+turns it into an OpenAI tool definition; declare `settings` or `llm`
+constructor parameters and they are injected automatically. HTTP
+helpers live in `skills/_http.py`, geocoding in `skills/_geo.py`,
+quota guards in `skills/_quota.py` - full guide:
+[docs/SKILLS.md](docs/SKILLS.md).
 
 ---
 
