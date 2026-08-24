@@ -74,7 +74,9 @@ SWEETTRACKER_API_KEY=...                    # aggregated parcel tracking
 LRL_API_KEY=...                             # URL shortener
 AVIATIONSTACK_API_KEY=...                   # scheduled flight data
 WEATHERAPI_API_KEY=...                      # worldwide weather
-KAKAO_REST_API_KEY=...                      # Korean places/navigation
+KAKAO_REST_API_KEY=...                     # Korean places/navigation
+KEENABLE_API_KEY=...                       # Keenable MCP live search
+QUOTA_STORE_PATH=usage.json                # provider usage counters
 MCP_CONFIG_PATH=mcp.json                    # external MCP servers
 ```
 
@@ -132,6 +134,33 @@ Every tool those servers expose is registered next to the built-in skills
 (namespaced as `<server>_<tool>`), and the same tool-calling loop drives them.
 Set `MCP_ENABLED=false` to skip MCP entirely. A failing server is skipped at
 startup - it never blocks the bot.
+
+---
+
+## API quota management
+
+Every metered call is counted in `usage.json` (git-ignored runtime state,
+path configurable via `QUOTA_STORE_PATH`) and enforced **before** the request
+goes out. Counters reset automatically with the calendar month/day, and when
+a budget is spent the skill degrades to its key-less fallback instead of
+erroring - e.g. an exhausted WeatherAPI key silently answers via Open-Meteo.
+
+| Bucket | Limit | On exhaustion |
+|---|---|---|
+| SweetTracker | 100/month + same waybill 10/day | falls back to CJ/Post scraping · repeats served from cache |
+| Kakao Map | 300,000/month | OSM Nominatim / OSRM |
+| WeatherAPI.com | 100,000/month | Open-Meteo |
+| Aviationstack | 100/month | OpenSky radar + adsbdb |
+| KMA 기상청 (data.go.kr) | ~1,000/day (service default) | Open-Meteo |
+| AirKorea 에어코리아 (data.go.kr) | ~500/day (service default) | Open-Meteo CAMS |
+| Open-Meteo (key-less) | ~10,000/day tracked defensively | readable error |
+| OpenSky (key-less) | ~100 calls/day (400 anonymous credits) | readable error |
+
+Notes: data.go.kr services share one credential string but each service
+meters separately, so KMA and AirKorea keep their own daily buckets.
+Nominatim is rate-limited by policy (1 req/s), enforced with a client-side
+throttle rather than a counter. Frankfurter, Yahoo Finance, OSRM demo,
+adsbdb and DuckDuckGo lite have no published hard limits and are not metered.
 
 ---
 
