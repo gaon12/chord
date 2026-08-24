@@ -681,3 +681,73 @@ async def test_rate_limit_gets_its_own_message():
 
     assert len(channel.sent) == 1
     assert "사용량 한도" in channel.sent[0]
+
+
+# -- Recovering from a rejected history -------------------------------------------
+
+
+def _bad_request(message: str):
+    from openai import BadRequestError
+
+    exc = BadRequestError.__new__(BadRequestError)
+    Exception.__init__(exc, message)
+    return exc
+
+
+HISTORY_400 = (
+    "400 - GenerateContentRequest.contents[0].parts[0]"
+    ".function_response.name: Name cannot be empty."
+)
+
+
+async def test_rejected_history_is_cleared_so_the_channel_recovers():
+    """Otherwise the same bad messages are re-sent on every later turn."""
+    bot, engine = _bot()
+    channel = FakeChannel()
+
+    await bot.on_message(FakeMessage("<@999> one", channel, mentions=[FakeUser(999)], guild="g"))
+    assert bot._store.history(channel.id)  # history exists now
+
+    async def rejected(user_text, history):
+        raise _bad_request(HISTORY_400)
+
+    engine.reply = rejected
+    await bot.on_message(FakeMessage("<@999> two", channel, mentions=[FakeUser(999)], guild="g"))
+
+    assert bot._store.history(channel.id) == []
+    assert "초기화" in channel.sent[-1]
+
+
+async def test_the_next_message_works_again_after_recovery():
+    bot, engine = _bot()
+    channel = FakeChannel()
+
+    await bot.on_message(FakeMessage("<@999> one", channel, mentions=[FakeUser(999)], guild="g"))
+
+    failed_once = []
+
+    async def rejected_once(user_text, history):
+        if not failed_once:
+            failed_once.append(True)
+            raise _bad_request(HISTORY_400)
+        return ("recovered", [{"role": "user", "content": user_text}])
+
+    engine.reply = rejected_once
+    await bot.on_message(FakeMessage("<@999> two", channel, mentions=[FakeUser(999)], guild="g"))
+    await bot.on_message(FakeMessage("<@999> three", channel, mentions=[FakeUser(999)], guild="g"))
+
+    assert channel.sent[-1] == "recovered"
+
+
+async def test_bad_request_without_history_is_not_blamed_on_history():
+    """An empty history cannot be the cause - a bad tool schema can."""
+    bot, engine = _bot()
+    channel = FakeChannel()
+
+    async def rejected(user_text, history):
+        raise _bad_request("400 - Invalid JSON schema for function 'add'.")
+
+    engine.reply = rejected
+    await bot.on_message(FakeMessage("<@999> hi", channel, mentions=[FakeUser(999)], guild="g"))
+
+    assert channel.sent == ["Sorry — something went wrong on my side."]

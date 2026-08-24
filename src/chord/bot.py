@@ -21,7 +21,7 @@ from typing import Any
 import discord
 from discord import app_commands
 from discord.ext import tasks
-from openai import APITimeoutError, RateLimitError
+from openai import APITimeoutError, BadRequestError, RateLimitError
 
 from chord.config import REASONING_EFFORT_BY_LEVEL, REASONING_LEVELS, Settings
 from chord.context import reset_current_channel, set_current_channel
@@ -585,6 +585,25 @@ class ChordBot(discord.Client):
                     message.channel,
                     "지금 API 사용량 한도에 걸렸어요. 잠시 뒤에 다시 물어봐 주세요.",
                 )
+                return
+            except BadRequestError:
+                # A history the provider refuses poisons every later
+                # message in the channel: the same rejected messages get
+                # re-sent forever. Drop it and let the user carry on
+                # rather than making them discover /reset.
+                if self._store.history(channel_id):
+                    logger.exception(
+                        "Provider rejected the request in channel %s; clearing history",
+                        channel_id,
+                    )
+                    self._store.reset(channel_id)
+                    await self._send(
+                        message.channel,
+                        "대화 기록이 꼬여서 초기화했어요. 다시 물어봐 주세요.",
+                    )
+                else:
+                    logger.exception("Chat failed in channel %s with no history", channel_id)
+                    await self._send(message.channel, "Sorry — something went wrong on my side.")
                 return
             except APITimeoutError:
                 logger.warning(
