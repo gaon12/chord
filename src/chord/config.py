@@ -34,6 +34,10 @@ REASONING_EFFORT_BY_LEVEL: dict[str, str | None] = {
     "heavy": "high",
 }
 
+#: The same levels as an ordered tuple, cheapest thinking first. Used to
+#: build the /reasoning choices so code and command never drift apart.
+REASONING_LEVELS: tuple[str, ...] = tuple(REASONING_EFFORT_BY_LEVEL)
+
 
 class Settings(BaseSettings):
     """Typed container for all configuration values."""

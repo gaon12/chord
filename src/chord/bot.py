@@ -21,7 +21,7 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 
-from chord.config import Settings
+from chord.config import REASONING_EFFORT_BY_LEVEL, REASONING_LEVELS, Settings
 from chord.context import reset_current_channel, set_current_channel
 from chord.conversation import ConversationStore
 from chord.engine import ChatEngine
@@ -158,8 +158,19 @@ HELP_TEXT = (
     "`/usage` — show remaining API quotas\n"
     "`/reminders` — list pending reminders\n"
     "`/reset` — forget this channel's conversation\n"
-    "`/persona` — view or reload the character definition"
+    "`/persona` — view or reload the character definition\n"
+    "`/reasoning` — view or set how hard I think before answering"
 )
+
+#: One line per level for /reasoning, so the trade-off is visible right
+#: where the choice is actually made.
+REASONING_LEVEL_HELP: dict[str, str] = {
+    "auto": "provider default (parameter not sent)",
+    "none": "answer immediately — fastest, best for chat",
+    "light": "a little thinking on hard questions",
+    "medium": "balanced",
+    "heavy": "think it through — slowest",
+}
 
 
 class ChordBot(discord.Client):
@@ -186,6 +197,9 @@ class ChordBot(discord.Client):
         self._store = ConversationStore()
         self._registry = registry or SkillRegistry()
         self._mcp = McpManager()
+        # Mirrors the LLM service so /reasoning can report a level name
+        # instead of the raw provider-side effort value.
+        self._reasoning_level = settings.reasoning_level
 
     async def setup_hook(self) -> None:
         """Called once after login but before the gateway connects."""
@@ -257,6 +271,63 @@ class ChordBot(discord.Client):
                 self._engine.system_prompt = self._persona.get()
                 msg = "🔄 Persona reloaded from file." if changed else "✅ Persona unchanged."
                 await interaction.response.send_message(msg, ephemeral=True)
+
+        @self.tree.command(
+            name="reasoning",
+            description="View or set how hard I think before answering",
+        )
+        @app_commands.describe(level="Leave empty to see the current setting")
+        @app_commands.choices(
+            level=[
+                app_commands.Choice(name=f"{name} — {REASONING_LEVEL_HELP[name]}", value=name)
+                for name in REASONING_LEVELS
+            ]
+        )
+        async def reasoning_cmd(
+            interaction: discord.Interaction,
+            level: str | None = None,
+        ) -> None:
+            message = (
+                self._describe_reasoning() if level is None else self._set_reasoning_level(level)
+            )
+            await interaction.response.send_message(message, ephemeral=True)
+
+    # -- Reasoning ----------------------------------------------------------------
+
+    def _describe_reasoning(self) -> str:
+        """Render the active level plus what the alternatives mean."""
+        current = self._reasoning_level
+        lines = [f"🧠 Reasoning level: **{current}** ({REASONING_LEVEL_HELP[current]})"]
+
+        llm = getattr(self._engine, "llm", None)
+        if llm is not None and current != "auto" and not llm.reasoning_enabled:
+            lines.append(
+                "⚠️ This model rejected the reasoning parameter, so the setting has no effect."
+            )
+        lines.append("Change it with `/reasoning <level>` — " + ", ".join(REASONING_LEVELS))
+        return "\n".join(lines)
+
+    def _set_reasoning_level(self, level: str) -> str:
+        """Apply a new reasoning level to the live LLM service.
+
+        Runtime only: ``REASONING_LEVEL`` in .env still decides what the
+        bot starts with after a restart.
+        """
+        if level not in REASONING_EFFORT_BY_LEVEL:
+            return f"Unknown level {level!r}. Pick one of: " + ", ".join(REASONING_LEVELS)
+
+        llm = getattr(self._engine, "llm", None)
+        if llm is None:
+            return "This engine has no adjustable LLM service."
+
+        llm.set_reasoning_effort(REASONING_EFFORT_BY_LEVEL[level])
+        previous, self._reasoning_level = self._reasoning_level, level
+        logger.info("Reasoning level changed: %s -> %s", previous, level)
+        return (
+            f"🧠 Reasoning level: **{previous}** → **{level}** "
+            f"({REASONING_LEVEL_HELP[level]})\n"
+            "_Applies to this session; set `REASONING_LEVEL` in .env to make it permanent._"
+        )
 
     # -- Background loops -------------------------------------------------------
 

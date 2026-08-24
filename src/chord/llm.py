@@ -68,6 +68,16 @@ class LLMService:
         #: instead of one per message.
         self._reasoning_supported = True
 
+    def set_reasoning_effort(self, effort: str | None) -> None:
+        """Change the effort at runtime, re-enabling the parameter.
+
+        A deliberate change deserves a fresh attempt even if the model
+        rejected the parameter earlier: the operator may have swapped
+        models, or may simply want to see the rejection again.
+        """
+        self.reasoning_effort = effort
+        self._reasoning_supported = True
+
     @property
     def reasoning_enabled(self) -> bool:
         """Whether the next request will carry ``reasoning_effort``."""

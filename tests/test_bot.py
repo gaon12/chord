@@ -6,13 +6,14 @@ import contextlib
 
 import quota_helpers  # noqa: F401  (conftest already isolates quota store)
 from chord.bot import (
+    HELP_TEXT,
     ChordBot,
     build_reply_context,
     clean_message_text,
     format_reply,
     split_message,
 )
-from chord.config import Settings
+from chord.config import REASONING_LEVELS, Settings
 
 # -- Stub classes -------------------------------------------------------------------
 
@@ -433,3 +434,94 @@ async def test_unexpected_handler_error_is_swallowed_and_logged(caplog):
     await bot.on_message(FakeMessage("<@999> hi", FakeChannel(), mentions=[FakeUser(999)]))
 
     assert "Unhandled error" in caplog.text
+
+
+# -- /reasoning ------------------------------------------------------------------------
+
+
+class StubLLM:
+    """Minimal LLMService stand-in for the /reasoning command."""
+
+    def __init__(self, effort: str | None = "minimal", enabled: bool = True):
+        self.reasoning_effort = effort
+        self._enabled = enabled
+
+    @property
+    def reasoning_enabled(self) -> bool:
+        return self._enabled and self.reasoning_effort is not None
+
+    def set_reasoning_effort(self, effort: str | None) -> None:
+        self.reasoning_effort = effort
+        self._enabled = True
+
+
+def _bot_with_llm(level: str = "none") -> tuple[ChordBot, StubLLM]:
+    settings = Settings(
+        _env_file=None,
+        discord_token="t",
+        openai_api_key="k",
+        reasoning_level=level,
+    )
+    engine = StubEngine()
+    llm = StubLLM()
+    engine.llm = llm
+    bot = ChordBot(settings=settings, engine=engine)
+    bot._me_id = 999
+    return bot, llm
+
+
+def test_reasoning_starts_at_the_configured_level():
+    bot, _ = _bot_with_llm("light")
+    assert "**light**" in bot._describe_reasoning()
+
+
+def test_describe_reasoning_lists_every_level():
+    bot, _ = _bot_with_llm()
+    described = bot._describe_reasoning()
+    assert all(level in described for level in REASONING_LEVELS)
+
+
+def test_setting_a_level_retunes_the_live_llm():
+    bot, llm = _bot_with_llm("none")
+
+    message = bot._set_reasoning_level("heavy")
+
+    assert llm.reasoning_effort == "high"
+    assert bot._reasoning_level == "heavy"
+    assert "**none**" in message and "**heavy**" in message
+
+
+def test_setting_auto_drops_the_parameter_entirely():
+    bot, llm = _bot_with_llm("medium")
+
+    bot._set_reasoning_level("auto")
+
+    assert llm.reasoning_effort is None
+    assert llm.reasoning_enabled is False
+
+
+def test_unknown_level_is_rejected_without_touching_the_llm():
+    bot, llm = _bot_with_llm("none")
+
+    message = bot._set_reasoning_level("galaxy-brain")
+
+    assert "Unknown level" in message
+    assert llm.reasoning_effort == "minimal"  # unchanged
+    assert bot._reasoning_level == "none"
+
+
+def test_describe_warns_when_the_model_rejected_the_parameter():
+    """Silently ignored settings are worse than none at all."""
+    bot, llm = _bot_with_llm("heavy")
+    llm._enabled = False
+
+    assert "no effect" in bot._describe_reasoning()
+
+
+def test_no_warning_when_reasoning_is_deliberately_off():
+    bot, _ = _bot_with_llm("auto")
+    assert "no effect" not in bot._describe_reasoning()
+
+
+def test_reasoning_is_advertised_in_help():
+    assert "/reasoning" in HELP_TEXT

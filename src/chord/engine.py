@@ -45,6 +45,11 @@ class ChatEngine:
         self.system_prompt = system_prompt
         self._max_tool_rounds = max_tool_rounds
 
+    @property
+    def llm(self) -> LLMService:
+        """The underlying LLM service, exposed so /reasoning can retune it."""
+        return self._llm
+
     async def reply(
         self,
         user_text: str,
