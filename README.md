@@ -25,6 +25,7 @@ tools when a question needs real-world data.
 | Date/time & timezones | `get_current_datetime`, `convert_timezone` | pure Python | - |
 | Unit conversion | `convert_units` | pure Python (incl. 평) | - |
 | URL shortener | `shorten_url`, `expand_short_url` | lrl.kr API | needs `LRL_API_KEY` |
+| URL safety | `check_url_safety` | Google Safe Browsing cache (lrl.kr) + Cloudflare 1.1.1.2 + Radar scan | Cloudflare DNS works key-less |
 | Summarize | `summarize_text` | your configured LLM | - |
 | Translate | `translate_text` | your configured LLM | - |
 | ELI5 explainer | `explain_eli5` | your configured LLM | - |
@@ -134,6 +135,24 @@ Every tool those servers expose is registered next to the built-in skills
 (namespaced as `<server>_<tool>`), and the same tool-calling loop drives them.
 Set `MCP_ENABLED=false` to skip MCP entirely. A failing server is skipped at
 startup - it never blocks the bot.
+
+---
+
+## URL safety checks
+
+`check_url_safety` combines independent verdicts so one source being wrong or
+unavailable cannot flip the answer:
+
+1. **lrl.kr v5** - Google Safe Browsing cache (`LRL_API_KEY`; the key must
+   have the URL-check service enabled at <https://api.lrl.kr>).
+2. **Cloudflare 1.1.1.2 for Families** - key-less DNS blocklist; malicious
+   domains resolve to `0.0.0.0`.
+3. **Cloudflare Radar URL Scanner** (optional) - a real live scan when
+   `CLOUDFLARE_API_KEY` + `CLOUDFLARE_ACCOUNT_ID` are set.
+
+Verdict logic: any unsafe source means **UNSAFE**; otherwise **SAFE** when at
+least one source actively cleared it; **UNKNOWN** if nothing could decide.
+Sources without keys are reported as skipped instead of failing the check.
 
 ---
 
