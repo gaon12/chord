@@ -114,18 +114,47 @@ def resolve_command(
     args: list[str],
     *,
     windows: bool | None = None,
+    base_dir: Path | None = None,
 ) -> tuple[str, list[str]]:
     """Make stdio commands portable across operating systems.
 
     On Windows, bare ``npx``/``npm`` resolve to .ps1 shims that
     subprocess spawning cannot execute; they are transparently wrapped
-    as ``cmd /c <name> ...``. On POSIX everything passes through.
-    ``windows`` overrides platform detection (for tests).
+    as ``cmd /c <name> ...``. Relative *paths* to real executables are
+    turned into absolute native paths (see :func:`absolutize_command`).
+    ``windows`` overrides platform detection (for tests); ``base_dir``
+    overrides the directory relative paths are resolved against.
     """
     is_windows = (os.name == "nt") if windows is None else windows
     if is_windows and Path(command).stem.lower() in _NODE_LAUNCHERS:
         return "cmd", ["/c", command, *args]
-    return command, args
+    return absolutize_command(command, base_dir=base_dir), args
+
+
+def absolutize_command(command: str, *, base_dir: Path | None = None) -> str:
+    """Expand a relative path-like command into an absolute native path.
+
+    mcp.json files conventionally spell local servers with forward
+    slashes (``.venv/Scripts/python.exe``, ``tools/foo/foo.exe``).
+    Windows' ``CreateProcess`` refuses such relative forward-slash
+    paths outright and the server dies with ``[WinError 2] file not
+    found`` even though the file is right there - so we hand it a fully
+    resolved path instead.
+
+    Bare program names (``npx``, ``uvx``, ``python``) contain no
+    separator and are returned untouched so normal PATH lookup still
+    happens. A path that does not exist is also returned untouched, so
+    the spawn failure keeps naming what the config actually said.
+    """
+    if not any(sep in command for sep in ("/", "\\")):
+        return command  # bare name -> leave PATH resolution to the OS
+    path = Path(command)
+    if path.is_absolute():
+        return os.fspath(path)
+    candidate = (base_dir or Path.cwd()) / path
+    if not candidate.exists():
+        return command
+    return os.fspath(candidate.resolve())
 
 
 def load_server_specs(

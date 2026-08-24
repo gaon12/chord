@@ -7,6 +7,7 @@ parsing and the Skill adapter are tested directly.
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -352,3 +353,53 @@ def test_python_placeholder_expands_to_running_interpreter(tmp_path):
     )
     specs = load_server_specs(config)
     assert specs["s"]["command"] == _sys.executable
+
+
+# -- Relative command paths ---------------------------------------------------------
+
+
+def test_relative_command_path_becomes_absolute(tmp_path):
+    """Windows CreateProcess rejects relative forward-slash paths."""
+    from chord.mcp_client import resolve_command
+
+    exe = tmp_path / "bin" / "server.exe"
+    exe.parent.mkdir()
+    exe.write_text("", encoding="utf-8")
+
+    command, args = resolve_command("bin/server.exe", ["--flag"], base_dir=tmp_path)
+
+    assert Path(command).is_absolute()
+    assert Path(command) == exe.resolve()
+    assert args == ["--flag"]
+
+
+def test_missing_relative_command_is_left_untouched(tmp_path):
+    """A typo'd path stays verbatim so the error message stays honest."""
+    from chord.mcp_client import resolve_command
+
+    assert resolve_command("bin/nope.exe", [], base_dir=tmp_path) == ("bin/nope.exe", [])
+
+
+def test_bare_program_names_keep_path_lookup(tmp_path):
+    from chord.mcp_client import absolutize_command
+
+    assert absolutize_command("uvx", base_dir=tmp_path) == "uvx"
+
+
+def test_absolute_command_paths_are_preserved(tmp_path):
+    from chord.mcp_client import absolutize_command
+
+    exe = tmp_path / "server.exe"
+    exe.write_text("", encoding="utf-8")
+
+    assert Path(absolutize_command(str(exe))) == exe
+
+
+def test_node_launchers_still_win_over_path_resolution(tmp_path):
+    """cmd-wrapping npx must happen before any path handling."""
+    from chord.mcp_client import resolve_command
+
+    assert resolve_command("npx", ["-y", "pkg"], windows=True, base_dir=tmp_path) == (
+        "cmd",
+        ["/c", "npx", "-y", "pkg"],
+    )
