@@ -40,15 +40,19 @@ class StubEngine:
 class FakeChannel:
     """Just enough of discord.TextChannel: typing() and send()."""
 
-    def __init__(self, channel_id: int = 100):
+    def __init__(self, channel_id: int = 100, raises: Exception | None = None):
         self.id = channel_id
         self.sent: list[str] = []
+        #: When set, every send() raises it (permission / HTTP failures).
+        self.raises = raises
 
     @contextlib.asynccontextmanager
     async def typing(self):
         yield None
 
     async def send(self, content: str):
+        if self.raises is not None:
+            raise self.raises
         self.sent.append(content)
 
 
@@ -72,11 +76,13 @@ class FakeMessage:
         mentions=(),
         guild=None,
         reference=None,
+        role_mentions=(),
     ):
         self.content = content
         self.channel = channel
         self.author = FakeAuthor(name=author_name, is_bot=author_bot)
         self.mentions = list(mentions)
+        self.role_mentions = list(role_mentions)
         self.guild = guild
         self.reference = reference
 
@@ -318,3 +324,112 @@ async def test_persona_refreshes_on_each_message():
         assert len(captured) >= 1  # system prompt was set from persona
     finally:
         del StubEngine.system_prompt
+
+
+# -- Why a message does (not) get answered -------------------------------------------
+
+
+class FakeRole:
+    def __init__(self, role_id: int):
+        self.id = role_id
+
+
+class FakeGuild:
+    """Guild exposing the bot member's roles, like discord.Guild.me."""
+
+    def __init__(self, my_role_ids=(), default_role_id: int = 1):
+        self.me = type("Member", (), {"roles": [FakeRole(r) for r in my_role_ids]})()
+        self.default_role = FakeRole(default_role_id)
+
+
+def test_role_mention_of_the_bots_own_role_is_answered():
+    """'@chord' usually autocompletes to the bot's integration role."""
+    bot, _ = _bot()
+    guild = FakeGuild(my_role_ids=[555])
+    msg = FakeMessage("<@&555> 안녕?", FakeChannel(), guild=guild, role_mentions=[FakeRole(555)])
+
+    assert bot._reply_reason(msg) == "role-mention"
+
+
+def test_everyone_ping_is_not_treated_as_a_mention():
+    bot, _ = _bot()
+    guild = FakeGuild(my_role_ids=[1], default_role_id=1)
+    msg = FakeMessage("@everyone", FakeChannel(), guild=guild, role_mentions=[FakeRole(1)])
+
+    assert bot._reply_reason(msg) is None
+
+
+def test_role_mention_of_someone_elses_role_is_ignored():
+    bot, _ = _bot()
+    guild = FakeGuild(my_role_ids=[555])
+    msg = FakeMessage("<@&777> hey", FakeChannel(), guild=guild, role_mentions=[FakeRole(777)])
+
+    assert bot._reply_reason(msg) is None
+
+
+def test_raw_mention_token_is_answered_when_mentions_are_unresolved():
+    """Guards against gateway payloads that don't resolve `mentions`."""
+    bot, _ = _bot()
+    msg = FakeMessage("<@999> 안녕?", FakeChannel(), guild="g", mentions=[])
+
+    assert bot._reply_reason(msg) == "mention-token"
+
+
+def test_nickname_mention_token_is_answered():
+    bot, _ = _bot()
+    msg = FakeMessage("<@!999> 안녕?", FakeChannel(), guild="g", mentions=[])
+
+    assert bot._reply_reason(msg) == "mention-token"
+
+
+def test_reply_reason_is_dm_outside_guilds():
+    bot, _ = _bot()
+    assert bot._reply_reason(FakeMessage("hi", FakeChannel())) == "dm"
+
+
+def test_role_mention_token_is_stripped_from_the_prompt():
+    assert clean_message_text("<@&555> 안녕?") == "안녕?"
+
+
+async def test_role_mention_reaches_the_engine():
+    bot, engine = _bot()
+    channel = FakeChannel()
+    guild = FakeGuild(my_role_ids=[555])
+
+    await bot.on_message(
+        FakeMessage("<@&555> 안녕?", channel, guild=guild, role_mentions=[FakeRole(555)])
+    )
+
+    assert engine.calls[0][0] == "안녕?"
+    assert channel.sent == ["answer!"]
+
+
+# -- Send failures and unexpected errors ----------------------------------------------
+
+
+async def test_missing_send_permission_does_not_crash_the_handler():
+    """403 on send must be logged, not raised into discord.py's void."""
+    import discord
+
+    bot, engine = _bot()
+    forbidden = discord.Forbidden.__new__(discord.Forbidden)
+    Exception.__init__(forbidden, "missing permissions")
+    channel = FakeChannel(raises=forbidden)
+
+    await bot.on_message(FakeMessage("<@999> hi", channel, mentions=[FakeUser(999)], guild="g"))
+
+    assert engine.calls  # the turn ran to completion
+    assert channel.sent == []
+
+
+async def test_unexpected_handler_error_is_swallowed_and_logged(caplog):
+    bot, _ = _bot()
+
+    async def boom(message):
+        raise RuntimeError("kaboom")
+
+    bot._handle_message = boom
+
+    await bot.on_message(FakeMessage("<@999> hi", FakeChannel(), mentions=[FakeUser(999)]))
+
+    assert "Unhandled error" in caplog.text

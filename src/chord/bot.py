@@ -38,8 +38,8 @@ logger = logging.getLogger(__name__)
 #: Discord hard-limits every message to 2000 characters.
 DISCORD_MESSAGE_LIMIT = 2000
 
-#: Matches <@123456> and <@!123456> mention tokens.
-_MENTION_RE = re.compile(r"<@!?\d+>")
+#: Matches user (<@123>, <@!123>) and role (<@&123>) mention tokens.
+_MENTION_RE = re.compile(r"<@[!&]?\d+>")
 
 
 def clean_message_text(content: str) -> str:
@@ -323,19 +323,45 @@ class ChordBot(discord.Client):
 
     async def on_ready(self) -> None:
         self._me_id = getattr(self.user, "id", None)
-        logger.info("Logged in as %s (id=%s)", self.user, self._me_id)
+        logger.info(
+            "Logged in as %s (id=%s) in %d guild(s)",
+            self.user,
+            self._me_id,
+            len(getattr(self, "guilds", ()) or ()),
+        )
+        if not self.intents.message_content:
+            logger.warning(
+                "Message Content Intent is off - mentions will arrive empty. "
+                "Enable it in the Developer Portal (Bot -> Privileged Gateway Intents)."
+            )
 
     async def on_message(self, message: discord.Message) -> None:
+        """Entry point for every message; never lets an error escape.
+
+        discord.py swallows unhandled listener errors into a traceback
+        nobody reads, which looks exactly like "the bot ignored me".
+        """
+        try:
+            await self._handle_message(message)
+        except Exception:
+            logger.exception(
+                "Unhandled error while handling message in channel %s",
+                getattr(getattr(message, "channel", None), "id", "?"),
+            )
+
+    async def _handle_message(self, message: discord.Message) -> None:
         if message.author.bot:
             return
 
-        if not self._should_reply(message):
+        reason = self._reply_reason(message)
+        if reason is None:
             return
 
         logger.debug(
-            "Processing message from %s in channel %s: %r",
+            "Answering message from %s in channel %s (reason=%s): %r",
             message.author,
             message.channel.id,
+            reason,
             message.content[:100],
         )
 
@@ -351,18 +377,19 @@ class ChordBot(discord.Client):
                     "Enable 'Message Content Intent' in the Developer Portal "
                     "(Bot -> Privileged Gateway Intents)."
                 )
-                await message.channel.send(
+                await self._send(
+                    message.channel,
                     "멘션은 받았는데 메시지 내용을 읽을 수 없어요. "
-                    "Developer Portal에서 **Message Content Intent**를 활성화해 주세요."
+                    "Developer Portal에서 **Message Content Intent**를 활성화해 주세요.",
                 )
             else:
-                await message.channel.send(HELP_TEXT)
+                await self._send(message.channel, HELP_TEXT)
             return
 
         # Build the full prompt including reply context.
         prompt_text = f"{reply_context}{user_text}" if reply_context else user_text
         if not prompt_text.strip():
-            await message.channel.send(HELP_TEXT)
+            await self._send(message.channel, HELP_TEXT)
             return
 
         channel_id = message.channel.id
@@ -376,7 +403,7 @@ class ChordBot(discord.Client):
                 )
             except Exception:
                 logger.exception("Chat failed in channel %s", channel_id)
-                await message.channel.send("Sorry — something went wrong on my side.")
+                await self._send(message.channel, "Sorry — something went wrong on my side.")
                 return
             finally:
                 reset_current_channel(token)
@@ -384,9 +411,34 @@ class ChordBot(discord.Client):
         self._store.append(channel_id, *new_messages)
         answer = format_reply(answer)
         for chunk in split_message(answer):
-            await message.channel.send(chunk)
+            if not await self._send(message.channel, chunk):
+                break
 
     # -- Internals ---------------------------------------------------------------
+
+    async def _send(self, channel: Any, content: str) -> bool:
+        """Send one message, turning Discord refusals into clear logs.
+
+        A missing "Send Messages" permission is otherwise invisible: the
+        bot does all the work and the channel stays empty.
+
+        Returns:
+            True when the message actually went out.
+        """
+        try:
+            await channel.send(content)
+            return True
+        except discord.Forbidden:
+            logger.error(
+                "Not allowed to send in channel %s. Give the bot 'View Channel' + "
+                "'Send Messages' (plus 'Send Messages in Threads' for threads) there.",
+                getattr(channel, "id", "?"),
+            )
+        except discord.HTTPException:
+            logger.exception(
+                "Discord rejected a message in channel %s", getattr(channel, "id", "?")
+            )
+        return False
 
     def _is_me(self, user: Any) -> bool:
         """Check if a user object is this bot (race-safe: ID-based)."""
@@ -397,20 +449,65 @@ class ChordBot(discord.Client):
 
     def _should_reply(self, message: discord.Message) -> bool:
         """Answer DMs, server mentions, and replies to bot messages."""
+        return self._reply_reason(message) is not None
+
+    def _reply_reason(self, message: discord.Message) -> str | None:
+        """Return *why* this message deserves an answer, else ``None``.
+
+        Split out from :meth:`_should_reply` so the reason can be logged.
+        A bot that silently ignores a mention is the hardest possible
+        thing to debug from the outside, so every decision is traceable.
+        """
         if message.guild is None:
-            return True
+            return "dm"
 
-        # Check mentions by user ID.
         my_id = self._me_id or getattr(self.user, "id", None)
-        mentioned_ids = {getattr(u, "id", None) for u in (message.mentions or [])}
-        if my_id is not None and my_id in mentioned_ids:
-            return True
+        if my_id is None:
+            return None
 
-        # Check if replying to one of our messages.
+        if my_id in {getattr(u, "id", None) for u in (message.mentions or [])}:
+            return "user-mention"
+
+        # Fallback: some gateway payloads (and cache misses) leave
+        # `mentions` unresolved while the raw token is still in the text.
+        content = message.content or ""
+        if f"<@{my_id}>" in content or f"<@!{my_id}>" in content:
+            return "mention-token"
+
+        if self._mentions_one_of_my_roles(message):
+            return "role-mention"
+
         ref = getattr(message, "reference", None)
         resolved = getattr(ref, "resolved", None)
-        resolved_author_id = getattr(getattr(resolved, "author", None), "id", None)
-        return my_id is not None and resolved_author_id == my_id
+        if getattr(getattr(resolved, "author", None), "id", None) == my_id:
+            return "reply-to-bot"
+
+        return None
+
+    def _mentions_one_of_my_roles(self, message: discord.Message) -> bool:
+        """True when the message pings a role this bot actually holds.
+
+        Typing ``@chord`` in a server very often autocompletes to the
+        bot's *integration role* instead of the bot user. Discord then
+        delivers the ping in ``role_mentions`` and leaves ``mentions``
+        empty, so an ID-only check never fires and the bot looks dead.
+
+        ``@everyone`` (the guild default role) is excluded on purpose -
+        answering every mass ping would be spam.
+        """
+        role_mentions = getattr(message, "role_mentions", None) or []
+        if not role_mentions:
+            return False
+
+        guild = message.guild
+        me = getattr(guild, "me", None)
+        my_role_ids = {getattr(role, "id", None) for role in (getattr(me, "roles", None) or [])}
+        my_role_ids.discard(None)
+        my_role_ids.discard(getattr(getattr(guild, "default_role", None), "id", None))
+        if not my_role_ids:
+            return False
+
+        return any(getattr(role, "id", None) in my_role_ids for role in role_mentions)
 
 
 def build_bot(settings: Settings) -> ChordBot:
