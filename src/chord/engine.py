@@ -71,8 +71,12 @@ class ChatEngine:
             *history,
             {"role": "user", "content": user_text},
         ]
-        # Everything after the frozen system prompt belongs to the turn.
-        turn_start = 1
+        # This turn owns everything from the new user message onwards.
+        # The system prompt and the caller's own history must NOT be
+        # returned: the caller already holds the history and appends what
+        # comes back, so re-returning it duplicates the whole
+        # conversation on every single turn.
+        turn_start = len(messages) - 1
 
         for _round in range(self._max_tool_rounds):
             completion = await self._llm.complete(messages, self._registry.to_openai_tools())

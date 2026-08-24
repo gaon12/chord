@@ -224,3 +224,52 @@ async def test_tool_loop_limit_returns_fallback():
     assert "stuck" in answer
     assert len(llm.requests) == 6  # DEFAULT_MAX_TOOL_ROUNDS
     assert new_messages[-1]["role"] == "assistant"
+
+
+# -- History ownership ------------------------------------------------------------
+
+
+async def test_reply_returns_only_this_turn_not_the_whole_history():
+    """The caller already holds the history; returning it again doubles it."""
+    engine = _engine(FakeLLM(_text_completion("hi")))
+    history = [
+        {"role": "user", "content": "earlier question"},
+        {"role": "assistant", "content": "earlier answer"},
+    ]
+
+    _, new_messages = await engine.reply("new question", history)
+
+    assert new_messages == [
+        {"role": "user", "content": "new question"},
+        {"role": "assistant", "content": "hi"},
+    ]
+
+
+async def test_history_stays_linear_over_many_turns():
+    """Regression: history used to grow 2 -> 6 -> 14 -> 30 -> 40 messages."""
+    from chord.conversation import ConversationStore
+
+    turns = 5
+    engine = _engine(FakeLLM(*[_text_completion("ok") for _ in range(turns)]))
+    store = ConversationStore()
+
+    for turn in range(turns):
+        _, new_messages = await engine.reply(f"q{turn}", store.history(1))
+        store.append(1, *new_messages)
+
+    assert len(store.history(1)) == turns * 2  # user + assistant per turn
+
+
+async def test_tool_round_returns_only_the_new_messages():
+    llm = FakeLLM(
+        _tool_call_completion(("call-1", "add", '{"a": 1, "b": 2}')),
+        _text_completion("3"),
+    )
+    engine = _engine(llm)
+    history = [{"role": "user", "content": "earlier"}]
+
+    _, new_messages = await engine.reply("1+2?", history)
+
+    assert new_messages[0] == {"role": "user", "content": "1+2?"}
+    assert not any(m.get("content") == "earlier" for m in new_messages)
+    assert [m["role"] for m in new_messages] == ["user", "assistant", "tool", "assistant"]
