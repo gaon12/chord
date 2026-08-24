@@ -47,9 +47,28 @@ Rules:
 |---|---|---|
 | `keenable` | live web search + page fetch | needs `KEENABLE_API_KEY` |
 | `korean-law` | 12 legal tools over 법제처 APIs (statutes, precedents, citation verification) | public server is rate-shared; append `?oc=<key>` from open.law.go.kr for an own credential |
-| `playwright` | browser automation: navigate / snapshot / click / screenshot | first run downloads the package; browsers via `npx playwright install chromium` |
+| `playwright` | browser automation: navigate / snapshot / click / screenshot | **not enabled by default** - see below |
 | `sqlite` | persistent memory for the LLM (`db_tables` / `db_query` / `db_execute` on `chord.db`) | runs inside the project venv, zero extra installs |
 | `rhwp` | HWP/HWPX reading, searching, form filling, PDF/text/SVG export | **not enabled by default** - see below |
+
+### playwright (opt-in)
+
+24 tools, ~1 582 prompt tokens charged on every message - a third of the
+default catalog's cost, for a capability most conversations never use.
+`keenable` already fetches page content, so playwright earns its keep
+only when the bot must *drive* a page: clicking through JS-rendered
+sites, filling forms, taking screenshots.
+
+```json
+"playwright": {
+  "command": "npx",
+  "args": ["-y", "@playwright/mcp@latest"]
+}
+```
+
+Written as `"npx"` it works everywhere - the `cmd /c` wrapping is applied
+automatically on Windows. The first run downloads the package; browsers
+install on demand with `npx playwright install chromium`.
 
 ### rhwp (opt-in)
 

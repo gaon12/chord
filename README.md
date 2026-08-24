@@ -179,8 +179,9 @@ sends the whole catalog again each round. Measured on this project with
 | Tools offered | Schema size | Prompt tokens per request |
 |---|---|---|
 | 24 (built-in only) | 11 341 chars | 3 490 |
-| 63 (default `mcp.json`) | 22 427 chars | 6 356 |
-| 145 (with an 82-tool server) | 47 677 chars | 15 303 |
+| 39 (default `mcp.json`) | 16 888 chars | 5 428 |
+| 63 (+ playwright) | 22 427 chars | 6 356 |
+| 145 (+ an 82-tool server) | 47 677 chars | 15 303 |
 
 The Gemini free tier allows **16 000 input tokens per minute**, so at 145
 tools a *single* greeting used 96% of the minute's budget and the next
@@ -221,10 +222,6 @@ never live in the config file:
     "korean-law": {
       "url": "https://mcp.gomdori.app/law"
     },
-    "playwright": {
-      "command": "cmd",
-      "args": ["/c", "npx", "-y", "@playwright/mcp@latest"]
-    },
     "sqlite": {
       "command": ".venv/Scripts/python.exe",
       "args": ["tools/sqlite_mcp_server.py", "--db-path", "chord.db"]
@@ -233,9 +230,10 @@ never live in the config file:
 }
 ```
 
-These four expose 39 tools, ~6 400 prompt tokens on top of the built-in
-skills. Every server you add is charged on every message, so weigh new
-ones against your provider's input-token rate limit - see
+These three expose 15 tools, bringing a request to 5 428 prompt tokens
+including the built-in skills - about three messages per minute on the
+Gemini free tier. Every server you add is charged on every message, so
+weigh new ones against your provider's input-token rate limit - see
 [Troubleshooting](#troubleshooting).
 
 With the `keenable` server configured (`KEENABLE_API_KEY=...` in `.env`) the
@@ -249,15 +247,16 @@ The other bundled servers:
   law text, citation verification (환각 방지), 조례 정비 레이더 등. Public
   server is quota-shared; append `?oc=<your key>` from
   <https://open.law.go.kr> for an own credential.
-* **playwright** (`@playwright/mcp`) - browser automation: navigate,
-  snapshot, click, fill forms, screenshot. Great for JS-rendered pages.
-  First run downloads the package; browsers install on demand via
-  `npx playwright install chromium`.
 * **sqlite** (`tools/sqlite_mcp_server.py`, in-repo) - `db_tables` /
   `db_query` / `db_execute` against `chord.db`, giving the LLM a small
   persistent memory it can create tables in.
 Not enabled by default:
 
+* **playwright** (`@playwright/mcp`) - browser automation: navigate,
+  snapshot, click, fill forms, screenshot. 24 tools, ~1 600 prompt tokens
+  on every message, and `keenable` already covers reading a page. Worth
+  turning on for JS-rendered pages you must actually drive - see
+  [docs/MCP.md](docs/MCP.md#playwright-opt-in).
 * **rhwp** - HWP/HWPX reading, searching, form filling and PDF/text/SVG
   export. Excellent tools, but **82 of them**: adding it takes a request
   from ~6 400 to ~15 300 prompt tokens, which alone exceeds the Gemini
