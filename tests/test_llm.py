@@ -9,10 +9,12 @@ untouched and returning the completion as-is.
 
 from __future__ import annotations
 
+import pytest
+from openai import BadRequestError
 from openai.types.chat import ChatCompletion
 
 from chord.config import Settings
-from chord.llm import LLMService, create_client
+from chord.llm import LLMService, create_client, is_reasoning_rejection
 
 API_BASE = "http://llm.test/v1"
 
@@ -161,3 +163,123 @@ async def test_complete_returns_full_completion_object():
 
     assert isinstance(completion, ChatCompletion)
     assert completion.model == "test-model"
+
+
+# -- Reasoning effort -----------------------------------------------------------------
+
+
+def _bad_request(message: str) -> BadRequestError:
+    """A BadRequestError carrying `message`, without a real HTTP response."""
+    exc = BadRequestError.__new__(BadRequestError)
+    Exception.__init__(exc, message)
+    return exc
+
+
+class RejectingCompletions(FakeCompletions):
+    """Rejects any request carrying reasoning_effort, like Gemma does."""
+
+    def __init__(self, response: dict, message: str):
+        super().__init__(response)
+        self._message = message
+
+    async def create(self, **kwargs) -> ChatCompletion:
+        if "reasoning_effort" in kwargs:
+            self.calls.append(kwargs)
+            raise _bad_request(self._message)
+        return await super().create(**kwargs)
+
+
+def _rejecting_service(
+    message: str = "Thinking level is not supported for this model.",
+) -> tuple[LLMService, FakeClient]:
+    fake = FakeClient(CHAT_RESPONSE)
+    fake.chat.completions = RejectingCompletions(CHAT_RESPONSE, message)
+    return LLMService(_settings(), client=fake), fake
+
+
+async def test_default_request_asks_for_minimal_reasoning():
+    service, fake = _service(CHAT_RESPONSE)
+
+    await service.complete(messages=[{"role": "user", "content": "hi"}])
+
+    assert fake.chat.completions.calls[0]["reasoning_effort"] == "minimal"
+
+
+async def test_reasoning_level_heavy_is_sent_as_high_effort():
+    fake = FakeClient(CHAT_RESPONSE)
+    settings = _settings().model_copy(update={"reasoning_level": "heavy"})
+    service = LLMService(settings, client=fake)
+
+    await service.complete(messages=[{"role": "user", "content": "hi"}])
+
+    assert fake.chat.completions.calls[0]["reasoning_effort"] == "high"
+
+
+async def test_reasoning_level_auto_sends_no_parameter():
+    fake = FakeClient(CHAT_RESPONSE)
+    settings = _settings().model_copy(update={"reasoning_level": "auto"})
+    service = LLMService(settings, client=fake)
+
+    await service.complete(messages=[{"role": "user", "content": "hi"}])
+
+    assert "reasoning_effort" not in fake.chat.completions.calls[0]
+    assert service.reasoning_enabled is False
+
+
+async def test_provider_rejecting_reasoning_still_gets_an_answer():
+    """Losing the knob is acceptable; losing the reply is not."""
+    service, fake = _rejecting_service()
+
+    completion = await service.complete(messages=[{"role": "user", "content": "hi"}])
+
+    assert completion.choices[0].message.content == "hello!"
+    assert "reasoning_effort" not in fake.chat.completions.calls[-1]
+
+
+async def test_reasoning_rejection_is_remembered_for_later_requests():
+    """An incompatible model costs one 400 per process, not one per message."""
+    service, fake = _rejecting_service()
+
+    await service.complete(messages=[{"role": "user", "content": "one"}])
+    calls_after_first = len(fake.chat.completions.calls)
+    await service.complete(messages=[{"role": "user", "content": "two"}])
+
+    assert service.reasoning_enabled is False
+    # Second turn is a single call - no repeated probe of the dead parameter.
+    assert len(fake.chat.completions.calls) == calls_after_first + 1
+
+
+async def test_gemini_thinking_budget_wording_is_recognized():
+    service, _ = _rejecting_service("Thinking budget is not supported for this model.")
+
+    completion = await service.complete(messages=[{"role": "user", "content": "hi"}])
+
+    assert completion.choices[0].message.content == "hello!"
+
+
+async def test_openai_unrecognized_argument_wording_is_recognized():
+    service, _ = _rejecting_service("Unrecognized request argument supplied: reasoning_effort")
+
+    completion = await service.complete(messages=[{"role": "user", "content": "hi"}])
+
+    assert completion.choices[0].message.content == "hello!"
+
+
+async def test_unrelated_bad_request_is_not_swallowed():
+    """A broken tool schema must not be misread as a reasoning rejection."""
+    fake = FakeClient(CHAT_RESPONSE)
+
+    async def create(**kwargs):
+        raise _bad_request("Invalid JSON schema for function 'get_weather'.")
+
+    fake.chat.completions.create = create
+    service = LLMService(_settings(), client=fake)
+
+    with pytest.raises(BadRequestError):
+        await service.complete(messages=[{"role": "user", "content": "hi"}])
+    assert service.reasoning_enabled is True
+
+
+def test_is_reasoning_rejection_ignores_unrelated_errors():
+    assert is_reasoning_rejection("Thinking budget is not supported")
+    assert not is_reasoning_rejection("rate limit exceeded")

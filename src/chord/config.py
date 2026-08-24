@@ -11,13 +11,28 @@ order (later wins):
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
-from pydantic import ValidationError
+from pydantic import ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 #: Default base URL points at the real OpenAI API, but any OpenAI-compatible
 #: server works (OpenRouter, Ollama, vLLM, ...) by overriding OPENAI_BASE_URL.
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+
+#: How hard the model should think before answering. Chat replies want
+#: speed far more than deliberation, so the scale starts at "none".
+ReasoningLevel = Literal["auto", "none", "light", "medium", "heavy"]
+
+#: Level -> OpenAI ``reasoning_effort`` value. ``None`` means "send no
+#: parameter at all and let the provider pick its own default".
+REASONING_EFFORT_BY_LEVEL: dict[str, str | None] = {
+    "auto": None,
+    "none": "minimal",
+    "light": "low",
+    "medium": "medium",
+    "heavy": "high",
+}
 
 
 class Settings(BaseSettings):
@@ -44,6 +59,13 @@ class Settings(BaseSettings):
 
     #: Model name, interpreted by whichever provider the base URL points to.
     openai_model: str = "gpt-4o-mini"
+
+    #: How much the model may deliberate before replying. Chat wants
+    #: fast answers, so the default asks for as little thinking as the
+    #: provider allows; "auto" sends nothing and keeps its default.
+    #: Providers that reject the parameter are detected at runtime and
+    #: fall back transparently (see chord.llm.LLMService).
+    reasoning_level: ReasoningLevel = "none"
 
     #: System prompt prepended to every conversation.
     system_prompt: str = (
@@ -106,6 +128,19 @@ class Settings(BaseSettings):
 
     #: SQLite database for reminders (also exposed via the sqlite MCP).
     reminder_db_path: Path = Path("chord.db")
+
+    @field_validator("reasoning_level", mode="before")
+    @classmethod
+    def _normalize_reasoning_level(cls, value: object) -> object:
+        """Accept 'NONE', ' Light ' and friends from hand-edited .env files."""
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
+    @property
+    def reasoning_effort(self) -> str | None:
+        """The ``reasoning_effort`` value to send, or None to send none."""
+        return REASONING_EFFORT_BY_LEVEL[self.reasoning_level]
 
 
 def load_settings(env_file: str | Path | None = None) -> Settings:

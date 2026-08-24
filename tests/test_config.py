@@ -143,3 +143,59 @@ def test_load_settings_without_arg_reads_default_dotenv(tmp_path, monkeypatch):
     settings = load_settings()  # no explicit env_file -> must use .env
     assert settings.discord_token == "from-dotenv"
     assert settings.openai_api_key == "from-dotenv"
+
+
+# -- Reasoning level ------------------------------------------------------------------
+
+
+def _minimal_settings(**overrides) -> Settings:
+    return Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        discord_token="discord-token",
+        openai_api_key="api-key",
+        **overrides,
+    )
+
+
+def test_reasoning_defaults_to_none_and_asks_for_minimal_effort():
+    """Chat replies want speed, so the bot asks for as little thinking as possible."""
+    settings = _minimal_settings()
+    assert settings.reasoning_level == "none"
+    assert settings.reasoning_effort == "minimal"
+
+
+@pytest.mark.parametrize(
+    ("level", "effort"),
+    [
+        ("auto", None),
+        ("none", "minimal"),
+        ("light", "low"),
+        ("medium", "medium"),
+        ("heavy", "high"),
+    ],
+)
+def test_reasoning_levels_map_to_openai_effort_values(level, effort):
+    assert _minimal_settings(reasoning_level=level).reasoning_effort == effort
+
+
+def test_reasoning_auto_sends_no_parameter():
+    """'auto' means: don't touch the provider's own default."""
+    assert _minimal_settings(reasoning_level="auto").reasoning_effort is None
+
+
+def test_reasoning_level_is_case_and_space_insensitive():
+    """Hand-edited .env files are forgiving."""
+    assert _minimal_settings(reasoning_level="  LIGHT ").reasoning_level == "light"
+
+
+def test_unknown_reasoning_level_is_rejected():
+    with pytest.raises(ValidationError):
+        _minimal_settings(reasoning_level="galaxy-brain")
+
+
+def test_reasoning_level_read_from_env_file(tmp_path):
+    env_file = _write_env(
+        tmp_path,
+        "DISCORD_TOKEN=t\nOPENAI_API_KEY=k\nREASONING_LEVEL=heavy\n",
+    )
+    assert load_settings(env_file).reasoning_level == "heavy"

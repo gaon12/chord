@@ -10,12 +10,35 @@ The bot never talks to the `openai` package directly; it goes through
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, BadRequestError
 from openai.types.chat import ChatCompletion, ChatCompletionToolParam
 
 from chord.config import Settings
+
+logger = logging.getLogger(__name__)
+
+#: Substrings that identify a 400 caused by ``reasoning_effort`` rather
+#: than by something else in the request (a bad tool schema, say).
+#: Seen in the wild: "Thinking budget is not supported for this model",
+#: "Thinking level is not supported for this model" (Gemini/Gemma),
+#: "Unrecognized request argument supplied: reasoning_effort" (OpenAI).
+_REASONING_REJECTION_MARKERS = (
+    "reasoning_effort",
+    "reasoning effort",
+    "thinking budget",
+    "thinking level",
+    "thinking config",
+    "thinking_config",
+)
+
+
+def is_reasoning_rejection(message: str) -> bool:
+    """True when an error message blames the reasoning parameter."""
+    lowered = message.lower()
+    return any(marker in lowered for marker in _REASONING_REJECTION_MARKERS)
 
 
 def create_client(settings: Settings) -> AsyncOpenAI:
@@ -38,6 +61,17 @@ class LLMService:
         # instead of hitting a real API.
         self._client = client if client is not None else create_client(settings)
         self.model = settings.openai_model
+        # Public so /reasoning can retune a running bot; None = send nothing.
+        self.reasoning_effort = settings.reasoning_effort
+        #: Flipped to False the first time the provider rejects the
+        #: parameter, so an incompatible model costs one 400 per process
+        #: instead of one per message.
+        self._reasoning_supported = True
+
+    @property
+    def reasoning_enabled(self) -> bool:
+        """Whether the next request will carry ``reasoning_effort``."""
+        return self.reasoning_effort is not None and self._reasoning_supported
 
     async def complete(
         self,
@@ -65,4 +99,26 @@ class LLMService:
             # questions are answered directly without forced tool use.
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
-        return await self._client.chat.completions.create(**kwargs)
+
+        if not self.reasoning_enabled:
+            return await self._client.chat.completions.create(**kwargs)
+
+        try:
+            return await self._client.chat.completions.create(
+                reasoning_effort=self.reasoning_effort, **kwargs
+            )
+        except BadRequestError as exc:
+            if not is_reasoning_rejection(str(exc)):
+                raise
+            # Plenty of OpenAI-compatible models simply have no notion of
+            # reasoning effort. Losing the knob is fine; losing the reply
+            # is not - so drop the parameter and answer anyway.
+            self._reasoning_supported = False
+            logger.warning(
+                "Model %s rejected reasoning_effort=%s (%s); "
+                "continuing without it for the rest of this run.",
+                self.model,
+                self.reasoning_effort,
+                exc,
+            )
+            return await self._client.chat.completions.create(**kwargs)
