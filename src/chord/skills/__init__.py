@@ -11,11 +11,14 @@ from __future__ import annotations
 from chord.config import Settings
 from chord.llm import LLMService
 from chord.skills.air_quality import AirQualitySkill
+from chord.skills.crypto import CryptoPriceSkill
 from chord.skills.datetime_info import ConvertTimezoneSkill, CurrentDatetimeSkill
 from chord.skills.delivery import DeliverySkill
 from chord.skills.exchange_rate import ExchangeRateSkill
 from chord.skills.flight import FlightSkill
 from chord.skills.map import FindPlacesSkill, GetDirectionsSkill
+from chord.skills.news import NewsSkill
+from chord.skills.random_utils import RandomPickSkill
 from chord.skills.registry import SkillRegistry
 from chord.skills.stock import StockPriceSkill
 from chord.skills.summarize import SummarizeSkill
@@ -25,6 +28,7 @@ from chord.skills.url_safety import CheckUrlSafetySkill
 from chord.skills.url_shortener import ExpandUrlSkill, ShortenUrlSkill
 from chord.skills.weather import WeatherSkill
 from chord.skills.web_search import WebSearchSkill
+from chord.skills.wikipedia import WikiSummarySkill
 
 __all__ = ["SkillRegistry", "create_default_registry"]
 
@@ -52,6 +56,10 @@ def create_default_registry(settings: Settings) -> SkillRegistry:
     registry.register(CurrentDatetimeSkill())
     registry.register(ConvertTimezoneSkill())
     registry.register(ConvertUnitsSkill())
+    registry.register(CryptoPriceSkill())
+    registry.register(WikiSummarySkill())
+    registry.register(NewsSkill())
+    registry.register(RandomPickSkill())
     registry.register(WebSearchSkill())
 
     # -- LLM-powered skills (summarize / translate / eli5) --------------------
