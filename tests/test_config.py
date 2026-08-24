@@ -82,3 +82,39 @@ def test_unknown_env_keys_are_ignored(tmp_path):
     )
     settings = load_settings(env_file)
     assert settings.discord_token == "t"
+
+
+# -- API key validation ---------------------------------------------------------------
+
+
+def test_empty_api_key_raises_with_provider_hint(tmp_path):
+    from chord.config import load_settings
+
+    env_file = _write_env(tmp_path, "DISCORD_TOKEN=t\nOPENAI_API_KEY=\n")
+    with pytest.raises(SystemExit, match="OPENAI_API_KEY is empty"):
+        load_settings(env_file)
+
+
+def test_whitespace_api_key_raises_with_hint(tmp_path):
+    from chord.config import load_settings
+
+    env_file = _write_env(tmp_path, "DISCORD_TOKEN=t\nOPENAI_API_KEY=   \n")
+    with pytest.raises(SystemExit, match="Any format works"):
+        load_settings(env_file)
+
+
+def test_non_sk_key_format_passes_validation(tmp_path):
+    """Gemini/OpenRouter keys must not be rejected for their format."""
+    from chord.config import load_settings
+
+    env_file = _write_env(tmp_path, "DISCORD_TOKEN=t\nOPENAI_API_KEY=AIzaSyTest123abc\n")
+    settings = load_settings(env_file)
+    assert settings.openai_api_key == "AIzaSyTest123abc"
+
+
+def test_discord_token_empty_also_validated(tmp_path):
+    from chord.config import load_settings
+
+    env_file = _write_env(tmp_path, "DISCORD_TOKEN=\nOPENAI_API_KEY=k\n")
+    with pytest.raises(SystemExit, match="DISCORD_TOKEN is empty"):
+        load_settings(env_file)

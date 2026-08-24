@@ -123,8 +123,9 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
     """
     try:
         if env_file is None:
-            return Settings(_env_file=None)  # type: ignore[call-arg]
-        return Settings(_env_file=env_file)  # type: ignore[call-arg]
+            settings = Settings(_env_file=None)  # type: ignore[call-arg]
+        else:
+            settings = Settings(_env_file=env_file)  # type: ignore[call-arg]
     except ValidationError as exc:
         missing = [str(err["loc"][0]) for err in exc.errors() if err["type"] == "missing"]
         raise SystemExit(
@@ -132,3 +133,29 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
             + (", ".join(missing) if missing else str(exc))
             + "\nCopy .env.sample to .env and fill in the values."
         ) from exc
+
+    _validate_api_keys(settings)
+    return settings
+
+
+def _validate_api_keys(settings: Settings) -> None:
+    """Reject empty/whitespace-only credentials with actionable hints."""
+    checks = [
+        (
+            "DISCORD_TOKEN",
+            settings.discord_token,
+            "Discord bot token from https://discord.com/developers/applications",
+        ),
+        (
+            "OPENAI_API_KEY",
+            settings.openai_api_key,
+            "API key from your LLM provider. Any format works:\n"
+            "  OpenAI: sk-... | Gemini: AIzaSy... | OpenRouter: sk-or-...\n"
+            "Just make sure OPENAI_BASE_URL matches the provider.",
+        ),
+    ]
+    for var_name, value, hint in checks:
+        if not value or not value.strip():
+            raise SystemExit(
+                f"{var_name} is empty or missing.\n{hint}\nSet it in .env (see .env.sample)."
+            )
