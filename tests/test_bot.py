@@ -7,10 +7,10 @@ import contextlib
 import quota_helpers  # noqa: F401  (conftest already isolates quota store)
 from chord.bot import (
     HELP_TEXT,
-    LARGE_TOOL_CATALOG,
     ChordBot,
     build_reply_context,
     clean_message_text,
+    estimate_tool_prompt_tokens,
     format_reply,
     split_message,
     warn_if_tool_catalog_is_large,
@@ -610,16 +610,74 @@ async def test_llm_timeout_gets_its_own_message():
 # -- Tool catalog size ------------------------------------------------------------
 
 
-def test_large_tool_catalog_warns_about_latency(caplog):
-    """145 tools turned a 3s greeting into a 29s one; say so out loud."""
+def _tools(count: int, schema_chars: int = 400) -> list[dict]:
+    """Tool definitions of a realistic size, for the size estimator."""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": f"tool_{i}",
+                "description": "d" * schema_chars,
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+        for i in range(count)
+    ]
+
+
+def test_tool_token_estimate_grows_with_the_catalog():
+    small = estimate_tool_prompt_tokens(_tools(10))
+    large = estimate_tool_prompt_tokens(_tools(100))
+
+    assert 0 < small < large
+
+
+def test_empty_catalog_costs_nothing():
+    assert estimate_tool_prompt_tokens([]) == 0
+
+
+def test_large_tool_catalog_warns_about_the_input_token_budget(caplog):
+    """145 tools measured at 15 303 prompt tokens - 96% of a 16k/min quota."""
     with caplog.at_level("WARNING"):
-        warn_if_tool_catalog_is_large(LARGE_TOOL_CATALOG)
+        warn_if_tool_catalog_is_large(_tools(120))
 
     assert "mcp.json" in caplog.text
+    assert "429" in caplog.text
 
 
 def test_normal_tool_catalog_stays_quiet(caplog):
     with caplog.at_level("WARNING"):
-        warn_if_tool_catalog_is_large(LARGE_TOOL_CATALOG - 1)
+        warn_if_tool_catalog_is_large(_tools(5))
 
     assert caplog.text == ""
+
+
+def test_warning_threshold_is_measured_in_tokens_not_tool_count(caplog):
+    """Many tiny tools are cheap; a few enormous schemas are not."""
+    with caplog.at_level("WARNING"):
+        warn_if_tool_catalog_is_large(_tools(200, schema_chars=10))
+    assert caplog.text == ""
+
+    with caplog.at_level("WARNING"):
+        warn_if_tool_catalog_is_large(_tools(3, schema_chars=20_000))
+    assert "mcp.json" in caplog.text
+
+
+async def test_rate_limit_gets_its_own_message():
+    """429 is a quota problem the user can act on, not an internal error."""
+    from openai import RateLimitError
+
+    bot, engine = _bot()
+    channel = FakeChannel()
+
+    async def throttled(user_text, history):
+        exc = RateLimitError.__new__(RateLimitError)
+        Exception.__init__(exc, "429 quota exceeded")
+        raise exc
+
+    engine.reply = throttled
+
+    await bot.on_message(FakeMessage("<@999> hi", channel, mentions=[FakeUser(999)], guild="g"))
+
+    assert len(channel.sent) == 1
+    assert "사용량 한도" in channel.sent[0]

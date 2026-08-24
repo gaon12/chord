@@ -13,6 +13,7 @@ All conversation logic lives in :mod:`chord.engine`.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Any
@@ -20,7 +21,7 @@ from typing import Any
 import discord
 from discord import app_commands
 from discord.ext import tasks
-from openai import APITimeoutError
+from openai import APITimeoutError, RateLimitError
 
 from chord.config import REASONING_EFFORT_BY_LEVEL, REASONING_LEVELS, Settings
 from chord.context import reset_current_channel, set_current_channel
@@ -236,23 +237,41 @@ REASONING_LEVEL_HELP: dict[str, str] = {
 }
 
 
-#: Every tool definition is re-sent with every request, so the catalog
-#: is paid for on each message in both latency and tokens. Measured on
-#: this project: 24 built-in tools answer "안녕?" in ~3s, all 145 (with
-#: five MCP servers connected) in ~29s. The number is a soft warning
-#: threshold, not a limit - nothing is ever dropped.
-LARGE_TOOL_CATALOG = 80
+#: Rough JSON-schema characters per token. Calibrated against the
+#: provider's own ``usage.prompt_tokens`` on this project: growing the
+#: catalog by 11 086 schema characters cost 2 866 tokens, and by 25 250
+#: characters cost 8 947 - i.e. 2.8-3.9 chars/token. Only ever used to
+#: decide whether to print a warning, never for accounting.
+_SCHEMA_CHARS_PER_TOKEN = 3.5
+
+#: Estimated prompt tokens of tool schemas above which the catalog is
+#: worth complaining about. Every tool definition is re-sent with every
+#: request, so this is charged per message and counts against the
+#: provider's input-token rate limit. The Gemini free tier allows 16 000
+#: input tokens per minute; past ~8 000 a single tool-calling turn (two
+#: requests) already exceeds it and the provider starts answering 429.
+LARGE_TOOL_PROMPT_TOKENS = 8000
 
 
-def warn_if_tool_catalog_is_large(tool_count: int) -> None:
-    """Point at mcp.json when the model has to wade through everything."""
-    if tool_count < LARGE_TOOL_CATALOG:
+def estimate_tool_prompt_tokens(tools: list[dict]) -> int:
+    """Approximate what the tool catalog adds to every single request."""
+    if not tools:
+        return 0
+    return int(len(json.dumps(tools, ensure_ascii=False)) / _SCHEMA_CHARS_PER_TOKEN)
+
+
+def warn_if_tool_catalog_is_large(tools: list[dict]) -> None:
+    """Point at mcp.json when the catalog eats the input-token budget."""
+    estimate = estimate_tool_prompt_tokens(tools)
+    if estimate < LARGE_TOOL_PROMPT_TOKENS:
         return
     logger.warning(
-        "%d tools are offered to the model on every message; expect slow "
-        "replies. Trim mcp.json (or set MCP_ENABLED=false) if the bot feels "
-        "sluggish - each server's tools are re-sent with every request.",
-        tool_count,
+        "%d tools add roughly %d prompt tokens to EVERY request (they are "
+        "re-sent each time, and a tool-calling turn sends them several "
+        "times). This is what exhausts input-token rate limits and turns "
+        "replies into 429 retries. Trim mcp.json or set MCP_ENABLED=false.",
+        len(tools),
+        estimate,
     )
 
 
@@ -290,7 +309,7 @@ class ChordBot(discord.Client):
         registered = await self._mcp.start(self._settings, self._registry.register)
         if registered:
             logger.info("Registered %d MCP tool(s).", registered)
-        warn_if_tool_catalog_is_large(len(self._registry))
+        warn_if_tool_catalog_is_large(self._registry.to_openai_tools())
         await self.tree.sync()
         self._mcp_reload_loop.start()
         self._reminder_loop.start()
@@ -556,6 +575,17 @@ class ChordBot(discord.Client):
                 answer, new_messages = await self._engine.reply(
                     prompt_text, self._store.history(channel_id)
                 )
+            except RateLimitError:
+                logger.warning(
+                    "Provider rate limit hit in channel %s. Large tool catalogs "
+                    "are the usual cause - see the startup warning.",
+                    channel_id,
+                )
+                await self._send(
+                    message.channel,
+                    "지금 API 사용량 한도에 걸렸어요. 잠시 뒤에 다시 물어봐 주세요.",
+                )
+                return
             except APITimeoutError:
                 logger.warning(
                     "LLM timed out after %ss in channel %s",

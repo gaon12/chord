@@ -76,6 +76,7 @@ class ChatEngine:
 
         for _round in range(self._max_tool_rounds):
             completion = await self._llm.complete(messages, self._registry.to_openai_tools())
+            log_token_usage(completion)
             message = completion.choices[0].message
             messages.append(_serialize_message(message))
 
@@ -98,6 +99,25 @@ class ChatEngine:
         logger.warning("Tool-call loop hit the %d-round limit", self._max_tool_rounds)
         fallback = "I got stuck going back and forth between tools - please try again."
         return fallback, [*messages[turn_start:], {"role": "assistant", "content": fallback}]
+
+
+def log_token_usage(completion: Any) -> None:
+    """Log what one request cost, so rate limits stop being a mystery.
+
+    Input tokens are the scarce resource: providers meter them per
+    minute, the tool catalog is re-sent on every round, and a turn that
+    calls tools spends this several times over. Logged at DEBUG, and
+    tolerant of providers that omit ``usage`` entirely.
+    """
+    usage = getattr(completion, "usage", None)
+    if usage is None:
+        return
+    logger.debug(
+        "Tokens: prompt=%s completion=%s total=%s",
+        getattr(usage, "prompt_tokens", "?"),
+        getattr(usage, "completion_tokens", "?"),
+        getattr(usage, "total_tokens", "?"),
+    )
 
 
 def _serialize_message(message: ChatCompletionMessage) -> dict[str, Any]:
