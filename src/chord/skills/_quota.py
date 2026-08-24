@@ -181,3 +181,24 @@ def get_quota_store(path: Path) -> QuotaStore:
     if key not in _STORES:
         _STORES[key] = QuotaStore(Path(path))
     return _STORES[key]
+
+
+def render_usage(store: QuotaStore) -> str:
+    """Render current usage of every tracked bucket as clean text."""
+    lines = ["API usage:"]
+    any_tracked = False
+    for name, limit in LIMITS.items():
+        parts: list[str] = []
+        if limit.monthly is not None:
+            used = store.month_used(name)
+            parts.append(f"this month {used:,}/{limit.monthly:,}")
+        if limit.daily is not None:
+            used = store.daily_count(name)
+            parts.append(f"today {used:,}/{limit.daily:,}")
+        if not parts:
+            continue
+        any_tracked = True
+        lines.append(f"- {limit.display or name}: " + " | ".join(parts))
+    if not any_tracked:
+        lines.append("- all providers untouched today")
+    return "\n".join(lines)

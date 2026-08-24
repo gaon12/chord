@@ -23,6 +23,7 @@ from chord.engine import ChatEngine
 from chord.llm import LLMService
 from chord.mcp_client import McpManager
 from chord.skills import create_default_registry
+from chord.skills._quota import get_quota_store, render_usage
 from chord.skills.registry import SkillRegistry
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ HELP_TEXT = (
     "**chord** - chat with me by mentioning me, e.g. `@chord how's the weather "
     "in Seoul?`\n"
     "`!help`  - show this message\n"
+    "`!usage` - show remaining API quotas\n"
     "`!reset` - forget this channel's conversation"
 )
 
@@ -174,11 +176,14 @@ class ChordBot(discord.Client):
         return self.me in (message.mentions or [])
 
     async def _handle_command(self, message: discord.Message) -> None:
-        """Handle the two plain-text commands the bot understands."""
+        """Handle the plain-text commands the bot understands."""
         command = message.content.strip().lower()
         if command == "!reset":
             self._store.reset(message.channel.id)
             await message.channel.send("Conversation cleared.")
+        elif command == "!usage":
+            store = get_quota_store(self._settings.quota_store_path)
+            await message.channel.send(render_usage(store))
         elif command == "!help":
             await message.channel.send(HELP_TEXT)
 

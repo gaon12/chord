@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 
+import quota_helpers
 from chord.bot import ChordBot, clean_message_text, split_message
 from chord.config import Settings
 
@@ -212,3 +213,37 @@ async def test_history_is_passed_to_engine_and_updated():
     # The second call must include the messages stored by the first turn.
     _, history_on_second = engine.calls[1]
     assert [m["content"] for m in history_on_second] == ["one"]
+
+
+# -- !usage command -------------------------------------------------------------------
+
+
+async def test_usage_command_reports_buckets():
+    from chord.skills._quota import QuotaStore
+
+    bot, _ = _bot()
+    channel = FakeChannel()
+
+    store = QuotaStore(quota_helpers.store_path())
+    store.record("sweettracker", n=7)
+
+    # The command must read the same store the skills use.
+    import chord.bot as bot_module
+
+    original = bot_module.get_quota_store
+    bot_module.get_quota_store = lambda path: store
+    try:
+        await bot.on_message(FakeMessage("!usage", channel))
+    finally:
+        bot_module.get_quota_store = original
+
+    text = "\n".join(channel.sent)
+    assert "API usage:" in text
+    assert "SweetTracker: this month 7/100" in text
+
+
+async def test_help_mentions_usage():
+    bot, _ = _bot()
+    channel = FakeChannel()
+    await bot.on_message(FakeMessage("!help", channel))
+    assert "!usage" in channel.sent[0]
