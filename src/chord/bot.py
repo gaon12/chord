@@ -2,10 +2,11 @@
 
 Responsibilities kept here (and nowhere else):
 
-* deciding when to answer (mentioned or DM),
-* cleaning the raw message into user text,
+* deciding when to answer (mentioned, DM'd, or replied-to),
+* cleaning raw messages into LLM-ready text,
+* registering and serving slash commands,
 * sending replies within Discord's length limits,
-* tiny convenience commands (!help / !reset).
+* extracting reply-to-message context for better answers.
 
 All conversation logic lives in :mod:`chord.engine`.
 """
@@ -16,6 +17,7 @@ import logging
 import re
 
 import discord
+from discord import app_commands
 from discord.ext import tasks
 
 from chord.config import Settings
@@ -38,15 +40,6 @@ DISCORD_MESSAGE_LIMIT = 2000
 #: Matches <@123456> and <@!123456> mention tokens.
 _MENTION_RE = re.compile(r"<@!?\d+>")
 
-HELP_TEXT = (
-    "**chord** - chat with me by mentioning me, e.g. `@chord how's the weather "
-    "in Seoul?`\n"
-    "`!help`  - show this message\n"
-    "`!usage` - show remaining API quotas\n"
-    "`!reminders - list pending reminders for this channel\n"
-    "`!reset` - forget this channel's conversation"
-)
-
 
 def clean_message_text(content: str) -> str:
     """Strip mention tokens and tidy whitespace from a raw message."""
@@ -68,14 +61,12 @@ def split_message(text: str, limit: int = DISCORD_MESSAGE_LIMIT) -> list[str]:
 
     chunks: list[str] = []
     for paragraph in text.split("\n\n"):
-        # A single paragraph can itself exceed the limit -> split harder.
         while len(paragraph) > limit:
             head, paragraph = _hard_slice(paragraph, limit)
             chunks.append(head)
         if paragraph:
             chunks.append(paragraph)
 
-    # Merge small neighbours so we do not spam many tiny messages.
     merged: list[str] = []
     for chunk in chunks:
         if merged and len(merged[-1]) + 2 + len(chunk) <= limit:
@@ -93,8 +84,45 @@ def _hard_slice(text: str, limit: int) -> tuple[str, str]:
     return text[:cut].rstrip(), text[cut:].lstrip()
 
 
+def build_reply_context(message: discord.Message) -> str:
+    """Extract replied-to message content for LLM context."""
+    ref = getattr(message, "reference", None)
+    resolved = getattr(ref, "resolved", None)
+    content = getattr(resolved, "content", None)
+    author = getattr(resolved, "author", None)
+
+    if not content or not content.strip() or not hasattr(author, "display_name"):
+        return ""
+
+    display_name = author.display_name
+    text = clean_message_text(content)
+    if len(text) > 500:
+        text = text[:497] + "..."
+    return f'[replying to {display_name}: "{text}"]\n'
+
+
+def format_reply(answer: str) -> str:
+    """Post-process LLM output for cleaner Discord rendering.
+
+    Currently a light pass-through; the LLM already produces markdown.
+    Kept as a seam for future formatting rules.
+    """
+    return answer.strip()
+
+
+HELP_TEXT = (
+    "**chord** — chat with me by mentioning me (`@chord 서울 날씨 어때?`) "
+    "or reply to any message.\n"
+    "`/help` — show this message\n"
+    "`/usage` — show remaining API quotas\n"
+    "`/reminders` — list pending reminders\n"
+    "`/reset` — forget this channel's conversation\n"
+    "`/persona` — view or reload the character definition"
+)
+
+
 class ChordBot(discord.Client):
-    """Discord client that answers mentions using the chat engine."""
+    """Discord client that answers mentions and slash commands."""
 
     def __init__(
         self,
@@ -102,40 +130,93 @@ class ChordBot(discord.Client):
         engine: ChatEngine,
         registry: SkillRegistry | None = None,
     ) -> None:
-        # message_content intent is required to read non-command messages;
-        # it must also be enabled in the developer portal.
         intents = discord.Intents.default()
         intents.message_content = True
         super().__init__(intents=intents)
 
-        # Cached in on_ready because Client.user is read-only and only
-        # populated after login; keeping our own reference also makes the
-        # mention check easy to exercise in tests.
         self.me: discord.ClientUser | None = None
+        self.tree = app_commands.CommandTree(self)
 
         self._settings = settings
         self._engine = engine
         self._persona = PersonaProvider(settings.persona_path)
         self._reminders = ReminderStore(settings.reminder_db_path)
         self._store = ConversationStore()
-        # The registry is kept so setup_hook can add MCP tools later;
-        # the engine reads it live, so additions are picked up
-        # immediately without rebuilding the engine.
         self._registry = registry or SkillRegistry()
         self._mcp = McpManager()
 
     async def setup_hook(self) -> None:
-        """Called once after login but before the gateway connects.
-
-        MCP servers are started here so their tools are registered
-        before the first message arrives, and a periodic loop keeps
-        them in sync with mcp.json edits at runtime.
-        """
+        """Called once after login but before the gateway connects."""
+        self._register_slash_commands()
         registered = await self._mcp.start(self._settings, self._registry.register)
         if registered:
             logger.info("Registered %d MCP tool(s).", registered)
+        await self.tree.sync()
         self._mcp_reload_loop.start()
         self._reminder_loop.start()
+
+    def _register_slash_commands(self) -> None:
+        """Register all slash commands on the command tree."""
+
+        @self.tree.command(name="help", description="Show what chord can do")
+        async def help_cmd(interaction: discord.Interaction) -> None:
+            await interaction.response.send_message(HELP_TEXT, ephemeral=True)
+
+        @self.tree.command(name="usage", description="Show remaining API quotas per provider")
+        async def usage_cmd(interaction: discord.Interaction) -> None:
+            store = get_quota_store(self._settings.quota_store_path)
+            await interaction.response.send_message(render_usage(store), ephemeral=True)
+
+        @self.tree.command(
+            name="reminders",
+            description="List pending reminders in this channel",
+        )
+        async def reminders_cmd(interaction: discord.Interaction) -> None:
+            rows = self._reminders.pending_for_channel(interaction.channel_id)
+            if not rows:
+                await interaction.response.send_message(
+                    "No pending reminders in this channel.", ephemeral=True
+                )
+                return
+            lines = [f"**{len(rows)} pending reminder(s)**"]
+            for row in rows:
+                local = row.due.astimezone().strftime("%m-%d %H:%M")
+                lines.append(f"> `#{row.id}` {local} — {row.text}")
+            await interaction.response.send_message("\n".join(lines))
+
+        @self.tree.command(
+            name="reset",
+            description="Clear this channel's conversation memory",
+        )
+        async def reset_cmd(interaction: discord.Interaction) -> None:
+            self._store.reset(interaction.channel_id)
+            await interaction.response.send_message("🧹 Conversation cleared.", ephemeral=True)
+
+        @self.tree.command(
+            name="persona",
+            description="View or reload the character definition",
+        )
+        @app_commands.describe(action="'view' shows current, 'reload' refreshes from file")
+        @app_commands.choices(
+            action=[
+                app_commands.Choice(name="view", value="view"),
+                app_commands.Choice(name="reload", value="reload"),
+            ]
+        )
+        async def persona_cmd(interaction: discord.Interaction, action: str = "reload") -> None:
+            if action == "view":
+                prompt = self._engine.system_prompt
+                preview = prompt[:300] + ("..." if len(prompt) > 300 else "")
+                await interaction.response.send_message(
+                    f"Current persona:\n```\n{preview}\n```", ephemeral=True
+                )
+            else:
+                changed = self._persona.refresh()
+                self._engine.system_prompt = self._persona.get()
+                msg = "🔄 Persona reloaded from file." if changed else "✅ Persona unchanged."
+                await interaction.response.send_message(msg, ephemeral=True)
+
+    # -- Background loops -------------------------------------------------------
 
     @tasks.loop(minutes=30)
     async def _mcp_reload_loop(self) -> None:
@@ -146,11 +227,11 @@ class ChordBot(discord.Client):
             )
             if changed:
                 logger.info("MCP tools refreshed from mcp.json.")
-        except Exception:  # noqa: BLE001 - a bad config must not kill the loop
+        except Exception:  # noqa: BLE001
             logger.exception("MCP reload failed; keeping previous servers.")
 
     @_mcp_reload_loop.before_loop
-    async def _wait_until_gateway_ready(self) -> None:
+    async def _wait_gateway_mcp(self) -> None:
         await self.wait_until_ready()
 
     @tasks.loop(seconds=30)
@@ -161,16 +242,15 @@ class ChordBot(discord.Client):
             logger.info("Delivered %d reminder(s).", delivered)
 
     @_reminder_loop.before_loop
-    async def _wait_until_gateway_ready_for_reminders(self) -> None:
+    async def _wait_gateway_reminders(self) -> None:
         await self.wait_until_ready()
 
     def _resolve_channel(self, channel_id: int):
-        """Find a channel by id (cached guild channels first, then fetch)."""
-        channel = self.get_channel(channel_id)
-        return channel
+        """Find a channel by id (cached guild channels first)."""
+        return self.get_channel(channel_id)
 
     async def deliver_due_reminders(self) -> int:
-        """Send every due reminder; returns how many were delivered."""
+        """Send every due reminder; returns count delivered."""
         count = 0
         for reminder in self._reminders.due():
             try:
@@ -183,7 +263,7 @@ class ChordBot(discord.Client):
                 )
                 self._reminders.mark_done(reminder.id)
                 count += 1
-            except Exception:  # noqa: BLE001 - one bad channel != stop all
+            except Exception:  # noqa: BLE001
                 logger.exception(
                     "Could not deliver reminder #%s to channel %s",
                     reminder.id,
@@ -191,95 +271,73 @@ class ChordBot(discord.Client):
                 )
         return count
 
-    @_mcp_reload_loop.before_loop
-    async def _wait_until_gateway_ready(self) -> None:
-        await self.wait_until_ready()
-
     async def close(self) -> None:
         self._reminder_loop.cancel()
         self._mcp_reload_loop.cancel()
         await self._mcp.stop()
         await super().close()
 
+    # -- Events -----------------------------------------------------------------
+
     async def on_ready(self) -> None:
         self.me = self.user
         logger.info("Logged in as %s (id=%s)", self.user, self.user and self.user.id)
 
     async def on_message(self, message: discord.Message) -> None:
-        # Ignore other bots and ourselves.
         if message.author.bot:
-            return
-
-        # Plain-text convenience commands start with '!'.
-        if message.content.startswith("!"):
-            await self._handle_command(message)
             return
         if not self._should_reply(message):
             return
 
         user_text = clean_message_text(message.content)
-        if not user_text:
+        reply_context = build_reply_context(message)
+
+        if not user_text and not reply_context:
+            await message.channel.send(HELP_TEXT)
+            return
+
+        # Build the full prompt including reply context.
+        prompt_text = reply_context + user_text if reply_context else user_text
+        if not prompt_text.strip():
             await message.channel.send(HELP_TEXT)
             return
 
         channel_id = message.channel.id
-        # Persona edits land on the very next message - no restart.
         self._engine.system_prompt = self._persona.get()
-        # Skills like set_reminder need to know where we are.
         token = set_current_channel(channel_id)
+
         async with message.channel.typing():
             try:
                 answer, new_messages = await self._engine.reply(
-                    user_text, self._store.history(channel_id)
+                    prompt_text, self._store.history(channel_id)
                 )
             except Exception:
                 logger.exception("Chat failed in channel %s", channel_id)
-                await message.channel.send("Sorry - something went wrong on my side.")
+                await message.channel.send("Sorry — something went wrong on my side.")
                 return
             finally:
                 reset_current_channel(token)
 
         self._store.append(channel_id, *new_messages)
+        answer = format_reply(answer)
         for chunk in split_message(answer):
             await message.channel.send(chunk)
 
-    # -- Internals -------------------------------------------------------------
+    # -- Internals ---------------------------------------------------------------
 
     def _should_reply(self, message: discord.Message) -> bool:
-        """Answer direct messages and server messages mentioning us."""
+        """Answer DMs, server mentions, and replies to bot messages."""
         if message.guild is None:
             return True
-        return self.me in (message.mentions or [])
-
-    async def _handle_command(self, message: discord.Message) -> None:
-        """Handle the plain-text commands the bot understands."""
-        command = message.content.strip().lower()
-        if command == "!reminders":
-            rows = self._reminders.pending_for_channel(message.channel.id)
-            if not rows:
-                await message.channel.send("No pending reminders in this channel.")
-                return
-            lines = [f"{len(rows)} pending reminder(s):"]
-            for row in rows:
-                local = row.due.astimezone().strftime("%m-%d %H:%M")
-                lines.append(f"#{row.id} {local} - {row.text}")
-            await message.channel.send("\n".join(lines))
-        elif command == "!reset":
-            self._store.reset(message.channel.id)
-            await message.channel.send("Conversation cleared.")
-        elif command == "!usage":
-            store = get_quota_store(self._settings.quota_store_path)
-            await message.channel.send(render_usage(store))
-        elif command == "!help":
-            await message.channel.send(HELP_TEXT)
+        if self.me in (message.mentions or []):
+            return True
+        ref = getattr(message, "reference", None)
+        resolved = getattr(ref, "resolved", None)
+        return resolved is not None and getattr(resolved, "author", None) == self.me
 
 
 def build_bot(settings: Settings) -> ChordBot:
-    """Create a fully wired bot instance from settings.
-
-    This is the composition root: everything (LLM client, skills, MCP,
-    engine) gets connected here, keeping individual modules decoupled.
-    """
+    """Create a fully wired bot instance from settings."""
     registry = create_default_registry(settings)
     engine = ChatEngine(
         llm=LLMService(settings),

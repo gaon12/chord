@@ -28,6 +28,9 @@ dependencies = [
     "mcp>=1.2",
     # IANA timezone database for Windows (zoneinfo falls back to it).
     "tzdata>=2024.1",
+    # Non-deprecated audioop replacement (discord.py imports it for voice;
+    # required on Python 3.13+ where stdlib audioop is removed).
+    'audioop-lts>=0.1.0; python_version >= "3.13"',
 ]
 
 [project.optional-dependencies]
@@ -73,3 +76,9 @@ ignore = [
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "-q"
+filterwarnings = [
+    # discord.py unconditionally imports audioop (deprecated in 3.11+,
+    # removed in 3.13) at import time for voice support. We don't use
+    # voice, and the fix is upstream. audioop-lts handles 3.13+.
+    "ignore::DeprecationWarning:discord.player",
+]
