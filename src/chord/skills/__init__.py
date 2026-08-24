@@ -1,77 +1,100 @@
 """Built-in skills shipped with chord.
 
-Adding a new skill is two steps:
+Skills are **plugins**: any public module in this package that defines
+one or more ``Skill`` subclasses whose names end in ``Skill`` is
+discovered and registered automatically by
+:func:`create_default_registry` - no manual registration line needed.
 
-1. Create a module here defining a :class:`chord.skills.base.Skill` subclass.
-2. Add it to :func:`create_default_registry` below.
+Constructor dependencies are injected by parameter name:
+
+* a ``settings`` parameter receives the shared :class:`Settings`
+* an ``llm`` parameter receives one shared :class:`LLMService`
+
+so a data skill is just ``def __init__(self, settings)`` (or no
+``__init__`` at all) and an LLM-backed skill is
+``def __init__(self, llm)``.
+
+Private modules (leading underscore) are helpers, not plugins.
 """
 
 from __future__ import annotations
 
+import importlib
+import inspect
+import logging
+import pkgutil
+
 from chord.config import Settings
 from chord.llm import LLMService
-from chord.skills.air_quality import AirQualitySkill
-from chord.skills.crypto import CryptoPriceSkill
-from chord.skills.datetime_info import ConvertTimezoneSkill, CurrentDatetimeSkill
-from chord.skills.delivery import DeliverySkill
-from chord.skills.exchange_rate import ExchangeRateSkill
-from chord.skills.flight import FlightSkill
-from chord.skills.map import FindPlacesSkill, GetDirectionsSkill
-from chord.skills.news import NewsSkill
-from chord.skills.random_utils import RandomPickSkill
+from chord.skills.base import Skill
 from chord.skills.registry import SkillRegistry
-from chord.skills.stock import StockPriceSkill
-from chord.skills.summarize import SummarizeSkill
-from chord.skills.translate import TranslateSkill
-from chord.skills.unit_convert import ConvertUnitsSkill
-from chord.skills.url_safety import CheckUrlSafetySkill
-from chord.skills.url_shortener import ExpandUrlSkill, ShortenUrlSkill
-from chord.skills.weather import WeatherSkill
-from chord.skills.web_search import WebSearchSkill
-from chord.skills.wikipedia import WikiSummarySkill
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["SkillRegistry", "create_default_registry"]
 
 
-def create_default_registry(settings: Settings) -> SkillRegistry:
-    """Build a registry containing every built-in skill.
+def _iter_skill_classes():
+    """Yield every concrete plugin class found in this package."""
+    package = importlib.import_module(__package__)
+    for module_info in sorted(pkgutil.iter_modules(package.__path__), key=lambda m: m.name):
+        name = module_info.name
+        if name.startswith("_") or name in {"registry", "base"}:
+            continue  # private helpers / infrastructure
+        module = importlib.import_module(f".{name}", __package__)
+        for attr_name, attr_value in vars(module).items():
+            if (
+                inspect.isclass(attr_value)
+                and issubclass(attr_value, Skill)
+                and attr_value is not Skill
+                and attr_name.endswith("Skill")
+                and attr_value.__module__ == module.__name__
+                and not inspect.isabstract(attr_value)
+            ):
+                yield f"{name}.{attr_name}", attr_value
 
-    Each skill contributes exactly one line here, which keeps the list
-    readable and makes additions/removals obvious in diffs.
+
+def _construct(skill_class, services: dict):
+    """Instantiate a skill, injecting services by constructor param name.
+
+    Uses ``inspect.signature(skill_class)`` so inherited no-op ``__init__``
+    methods resolve to zero arguments instead of object's ``*args``.
+    """
+    signature = inspect.signature(skill_class)
+    kwargs = {}
+    for param_name, param in signature.parameters.items():
+        if param_name == "self" or param.default is not inspect.Parameter.empty:
+            continue
+        if param_name not in services:
+            raise ValueError(
+                f"{skill_class.__name__} needs a '{param_name}' argument; "
+                f"available services: {sorted(services)}."
+            )
+        kwargs[param_name] = services[param_name]
+    return skill_class(**kwargs)
+
+
+def create_default_registry(settings: Settings) -> SkillRegistry:
+    """Discover every built-in skill and return a ready registry.
+
+    Discovery rules keep additions trivial - drop a module with a
+    ``SomethingSkill`` class here and it just works:
+
+    * public modules only (no leading underscore)
+    * classes must subclass :class:`chord.skills.base.Skill` and end in
+      ``Skill``
+    * ``settings`` / ``llm`` constructor parameters are injected
+      automatically (one shared LLMService instance)
     """
     registry = SkillRegistry()
-
-    # -- Data skills (real-world lookups) ------------------------------------
-    registry.register(WeatherSkill(settings))
-    registry.register(ExchangeRateSkill())
-    registry.register(StockPriceSkill())
-    registry.register(AirQualitySkill(settings))
-    registry.register(DeliverySkill(settings))
-    registry.register(FlightSkill(settings))
-    registry.register(ShortenUrlSkill(settings))
-    registry.register(ExpandUrlSkill(settings))
-    registry.register(CheckUrlSafetySkill(settings))
-    registry.register(FindPlacesSkill(settings))
-    registry.register(GetDirectionsSkill(settings))
-    registry.register(CurrentDatetimeSkill())
-    registry.register(ConvertTimezoneSkill())
-    registry.register(ConvertUnitsSkill())
-    registry.register(CryptoPriceSkill())
-    registry.register(WikiSummarySkill())
-    registry.register(NewsSkill())
-    registry.register(RandomPickSkill())
-    registry.register(WebSearchSkill())
-
-    # -- LLM-powered skills (summarize / translate / eli5) --------------------
-    # They reuse the same chat model as the main conversation, so a
-    # single LLMService instance is shared across all of them.
     llm = LLMService(settings)
-    registry.register(SummarizeSkill(llm))
-    registry.register(TranslateSkill(llm))
+    services = {"settings": settings, "llm": llm}
 
-    return registry
+    for origin, skill_class in _iter_skill_classes():
+        try:
+            registry.register(_construct(skill_class, services))
+        except Exception:  # noqa: BLE001 - one broken plugin != broken bot
+            logger.exception("Skipping skill %s (construction failed).", origin)
 
-    # -- LLM-powered skills (summarize / translate / eli5) --------------------
-    # (registered as they are implemented)
-
+    logger.info("Discovered %d built-in skills.", len(registry))
     return registry
