@@ -7,11 +7,13 @@ import contextlib
 import quota_helpers  # noqa: F401  (conftest already isolates quota store)
 from chord.bot import (
     HELP_TEXT,
+    LARGE_TOOL_CATALOG,
     ChordBot,
     build_reply_context,
     clean_message_text,
     format_reply,
     split_message,
+    warn_if_tool_catalog_is_large,
 )
 from chord.config import REASONING_LEVELS, Settings
 
@@ -603,3 +605,21 @@ async def test_llm_timeout_gets_its_own_message():
 
     assert len(channel.sent) == 1
     assert "다시 물어봐" in channel.sent[0]
+
+
+# -- Tool catalog size ------------------------------------------------------------
+
+
+def test_large_tool_catalog_warns_about_latency(caplog):
+    """145 tools turned a 3s greeting into a 29s one; say so out loud."""
+    with caplog.at_level("WARNING"):
+        warn_if_tool_catalog_is_large(LARGE_TOOL_CATALOG)
+
+    assert "mcp.json" in caplog.text
+
+
+def test_normal_tool_catalog_stays_quiet(caplog):
+    with caplog.at_level("WARNING"):
+        warn_if_tool_catalog_is_large(LARGE_TOOL_CATALOG - 1)
+
+    assert caplog.text == ""

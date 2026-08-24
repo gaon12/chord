@@ -236,6 +236,26 @@ REASONING_LEVEL_HELP: dict[str, str] = {
 }
 
 
+#: Every tool definition is re-sent with every request, so the catalog
+#: is paid for on each message in both latency and tokens. Measured on
+#: this project: 24 built-in tools answer "안녕?" in ~3s, all 145 (with
+#: five MCP servers connected) in ~29s. The number is a soft warning
+#: threshold, not a limit - nothing is ever dropped.
+LARGE_TOOL_CATALOG = 80
+
+
+def warn_if_tool_catalog_is_large(tool_count: int) -> None:
+    """Point at mcp.json when the model has to wade through everything."""
+    if tool_count < LARGE_TOOL_CATALOG:
+        return
+    logger.warning(
+        "%d tools are offered to the model on every message; expect slow "
+        "replies. Trim mcp.json (or set MCP_ENABLED=false) if the bot feels "
+        "sluggish - each server's tools are re-sent with every request.",
+        tool_count,
+    )
+
+
 class ChordBot(discord.Client):
     """Discord client that answers mentions and slash commands."""
 
@@ -270,6 +290,7 @@ class ChordBot(discord.Client):
         registered = await self._mcp.start(self._settings, self._registry.register)
         if registered:
             logger.info("Registered %d MCP tool(s).", registered)
+        warn_if_tool_catalog_is_large(len(self._registry))
         await self.tree.sync()
         self._mcp_reload_loop.start()
         self._reminder_loop.start()
