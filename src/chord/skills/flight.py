@@ -17,6 +17,7 @@ from typing import Any, ClassVar
 
 from chord.skills._geo import geocode
 from chord.skills._http import SkillHTTPError, get_json
+from chord.skills._quota import get_quota_store
 from chord.skills.base import Skill
 
 OPENSKY_URL = "https://opensky-network.org/api/states/all"
@@ -101,14 +102,17 @@ def _airport_label(airport: dict | None) -> str:
     return f"{code} {city}".strip()
 
 
-async def fetch_aviationstack(api_key: str, callsign: str) -> str:
+async def fetch_aviationstack(api_key: str, callsign: str, quota=None) -> str:
     """Scheduled/real-time flight info from Aviationstack.
 
     Tries the IATA flight designator first (KE801) and then the ICAO
     one (KAL801), since callers may supply either form. Raises
     SkillHTTPError when no matching flight exists so the caller can
-    fall back to radar data.
+    fall back to radar data. Each successful lookup consumes one unit
+    of the monthly Aviationstack budget.
     """
+    if quota is not None:
+        quota.require("aviationstack")
     data = {}
     error: Exception | None = None
     for param in ("flight_iata", "flight_icao"):
@@ -126,6 +130,8 @@ async def fetch_aviationstack(api_key: str, callsign: str) -> str:
         if error is not None:
             raise error
         raise SkillHTTPError(f"No flight found for '{callsign}' on Aviationstack.")
+    if quota is not None:
+        quota.record("aviationstack")
 
     entry = flights[0]
     status = AVIATIONSTACK_STATUS.get(str(entry.get("flight_status", "")), "unknown")
@@ -193,15 +199,19 @@ class FlightSkill(Skill):
 
     async def _track_callsign(self, raw_callsign: str) -> str:
         callsign = raw_callsign.replace(" ", "").upper()
+        quota = get_quota_store(self._settings.quota_store_path)
 
         # Preferred provider: Aviationstack (scheduled + real-time data),
         # available when the operator configured an API key.
         if self._settings.aviationstack_api_key:
             try:
-                return await fetch_aviationstack(self._settings.aviationstack_api_key, callsign)
+                return await fetch_aviationstack(
+                    self._settings.aviationstack_api_key, callsign, quota
+                )
             except SkillHTTPError:
                 pass  # fall through to the key-less radar sources
 
+        quota.require("opensky")
         payload = await get_json(OPENSKY_URL, params={"callsign": callsign})
         flights = [flight for flight in parse_states(payload) if flight.callsign == callsign]
         if not flights:
@@ -227,12 +237,14 @@ class FlightSkill(Skill):
 
     async def _count_near_city(self, city: str) -> str:
         location = await geocode(city)
+        quota = get_quota_store(self._settings.quota_store_path)
         params = {
             "lamin": location["latitude"] - SEARCH_RADIUS_DEGREES,
             "lamax": location["latitude"] + SEARCH_RADIUS_DEGREES,
             "lomin": location["longitude"] - SEARCH_RADIUS_DEGREES,
             "lomax": location["longitude"] + SEARCH_RADIUS_DEGREES,
         }
+        quota.require("opensky")
         payload = await get_json(OPENSKY_URL, params=params)
         flights = [flight for flight in parse_states(payload) if flight.is_airborne]
 

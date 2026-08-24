@@ -6,9 +6,12 @@ CJ answers JSON from an AJAX endpoint; Korea Post renders HTML tables.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 import respx
 
+import quota_helpers
 from chord.config import Settings
 from chord.skills._http import SkillHTTPError
 from chord.skills.delivery import (
@@ -260,3 +263,61 @@ def test_is_delivered_covers_languages():
     assert is_delivered("도착완료")
     assert not is_delivered("in transit")
     assert not is_delivered("상품이동중")
+
+
+# -- Quota enforcement ---------------------------------------------------------------
+
+
+def _bump_monthly(bucket: str, count: int) -> None:
+    from datetime import datetime
+
+    path = quota_helpers.store_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    monthly = data.setdefault("monthly", {})
+    entry = monthly.setdefault(bucket, {"period": "", "count": 0})
+    entry["period"] = datetime.now().strftime("%Y-%m")
+    entry["count"] = count
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+@respx.mock
+async def test_sweettracker_monthly_quota_blocks_lookup():
+    _bump_monthly("sweettracker", 100)
+
+    settings = _settings(sweettracker_api_key="secret")
+    with pytest.raises(SkillHTTPError, match="monthly limit of 100"):
+        await DeliverySkill(settings).run(carrier="cj", tracking_number="12345678901")
+
+
+@respx.mock
+async def test_same_waybill_over_daily_cap_serves_cache():
+    respx.get(SWEETTRACKER_URL).respond(
+        json={
+            "status": True,
+            "trackingDetails": [
+                {
+                    "time": "2026-08-22 15:00:00",
+                    "status": {"id": "delivered", "text": "배달완료"},
+                    "location": {"name": "강남지점"},
+                }
+            ],
+        }
+    )
+    settings = _settings(sweettracker_api_key="secret")
+
+    first = await DeliverySkill(settings).run(carrier="cj", tracking_number="77777777777")
+
+    # Burn through the per-number daily budget (10 lookups per day).
+    from chord.skills._quota import get_quota_store
+
+    store = get_quota_store(quota_helpers.store_path())
+    key = "sweettracker#77777777777"
+    store.bump_daily(key, 10 - store.daily_count(key))
+
+    route = respx.get(SWEETTRACKER_URL)
+    calls_before = route.call_count
+    second = await DeliverySkill(settings).run(carrier="cj", tracking_number="77777777777")
+
+    assert route.call_count == calls_before  # served from cache, no API call
+    assert second == first

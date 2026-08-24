@@ -16,17 +16,25 @@ geocoder), so callers never have to deal with raw coordinates.
 
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import ClassVar
 
 from chord.config import Settings
 from chord.skills._geo import geocode
 from chord.skills._http import SkillHTTPError, get_json
+from chord.skills._quota import get_quota_store
 from chord.skills.base import Skill
 
 KAKAO_KEYWORD_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
 KAKAO_NAVI_URL = "https://apis-navi.kakaomobility.com/v1/directions"
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 OSRM_URL = "https://router.project-osrm.org/route/v1/driving/{coords}"
+
+#: Nominatim usage policy: absolute maximum of one request per second.
+_NOMINATIM_MIN_INTERVAL = 1.1
+_nominatim_lock = asyncio.Lock()
+_last_nominatim_call = -1_000.0
 
 
 def is_korea(location: dict) -> bool:
@@ -58,12 +66,16 @@ def format_distance(meters: float | int | None) -> str:
 # ---------------------------------------------------------------------------
 
 
-async def search_kakao(api_key: str, query: str) -> list[dict]:
+async def search_kakao(api_key: str, query: str, quota=None) -> list[dict]:
+    if quota is not None:
+        quota.require("kakao_map")
     data = await get_json(
         KAKAO_KEYWORD_URL,
         params={"query": query, "size": 5},
         headers={"Authorization": f"KakaoAK {api_key}"},
     )
+    if quota is not None:
+        quota.record("kakao_map")
     documents = data.get("documents") or []
     return [
         {
@@ -77,6 +89,15 @@ async def search_kakao(api_key: str, query: str) -> list[dict]:
 
 
 async def search_nominatim(query: str) -> list[dict]:
+    # Nominatim's usage policy demands at most one request per second;
+    # a tiny process-level throttle keeps us compliant under bursts.
+    global _last_nominatim_call
+    async with _nominatim_lock:
+        elapsed = time.monotonic() - _last_nominatim_call
+        if elapsed < _NOMINATIM_MIN_INTERVAL:
+            await asyncio.sleep(_NOMINATIM_MIN_INTERVAL - elapsed)
+        _last_nominatim_call = time.monotonic()
+
     data = await get_json(
         NOMINATIM_URL,
         params={"q": query, "format": "jsonv2", "limit": 5},
@@ -120,11 +141,12 @@ class FindPlacesSkill(Skill):
         # Decide the provider by where the query seems to point; a quick
         # geocode of the query itself tells us the country context.
         location = await geocode(query)
+        quota = get_quota_store(self._settings.quota_store_path)
         places: list[dict] = []
         source = ""
         if self._settings.kakao_rest_api_key and is_korea(location):
             try:
-                places = await search_kakao(self._settings.kakao_rest_api_key, query)
+                places = await search_kakao(self._settings.kakao_rest_api_key, query, quota)
                 source = "Kakao"
             except SkillHTTPError:
                 pass
@@ -168,8 +190,10 @@ async def route_osrm(origin: dict, destination: dict) -> tuple[str, str]:
     return format_distance(routes[0].get("distance")), format_duration(routes[0].get("duration"))
 
 
-async def route_kakao(api_key: str, origin: dict, destination: dict) -> tuple[str, str]:
+async def route_kakao(api_key: str, origin: dict, destination: dict, quota=None) -> tuple[str, str]:
     """Kakao Navi driving route for Korean endpoints (WGS84 coordinates)."""
+    if quota is not None:
+        quota.require("kakao_map")
     data = await get_json(
         KAKAO_NAVI_URL,
         params={
@@ -181,6 +205,8 @@ async def route_kakao(api_key: str, origin: dict, destination: dict) -> tuple[st
     routes = data.get("routes") or []
     if not routes:
         raise SkillHTTPError("Kakao Navi found no route between those places.")
+    if quota is not None:
+        quota.record("kakao_map")
     summary = routes[0].get("summary") or {}
     # Kakao reports distance in meters and duration in milliseconds.
     distance = format_distance(summary.get("distance"))
@@ -216,6 +242,7 @@ class GetDirectionsSkill(Skill):
     async def run(self, origin: str, destination: str) -> str:
         origin_loc = await geocode(origin)
         destination_loc = await geocode(destination)
+        quota = get_quota_store(self._settings.quota_store_path)
 
         source = ""
         try:
@@ -223,7 +250,7 @@ class GetDirectionsSkill(Skill):
                 is_korea(origin_loc) and is_korea(destination_loc)
             ):
                 distance, duration = await route_kakao(
-                    self._settings.kakao_rest_api_key, origin_loc, destination_loc
+                    self._settings.kakao_rest_api_key, origin_loc, destination_loc, quota
                 )
                 source = "Kakao Navi"
             else:

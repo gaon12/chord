@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta, timezone
 import pytest
 import respx
 
+import quota_helpers
 from chord.config import Settings
 from chord.skills._http import SkillHTTPError
 from chord.skills.weather import (
@@ -215,3 +216,17 @@ def test_kst_offset_math_is_consistent():
     kst_now = utc_now.astimezone(kst)
     # 15:00 UTC is midnight at the start of the next KST day.
     assert (kst_now.day, kst_now.hour) == (24, 0)
+
+
+@respx.mock
+async def test_exhausted_weatherapi_falls_back_to_open_meteo():
+    quota_helpers.prefill_quota("weatherapi", 100_000)
+    respx.get(GEO_URL).respond(json=_geocode_ok())
+    weatherapi_route = respx.get(WEATHERAPI_URL).respond(json=_weatherapi_response())
+    respx.get(OPEN_METEO_URL).respond(json=_open_meteo_response())
+
+    settings = _settings(weatherapi_api_key="wkey")
+    result = await WeatherSkill(settings).run(city="Seoul")
+
+    assert not weatherapi_route.called  # quota checked before any request
+    assert "[via Open-Meteo]" in result

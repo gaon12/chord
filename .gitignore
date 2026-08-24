@@ -7,6 +7,9 @@
 # Local MCP server config may contain real endpoints/keys via ${VARS}.
 mcp.json
 
+# Persisted API usage counters (runtime state).
+usage.json
+
 # --- Python ----------------------------------------------------------------
 __pycache__/
 *.py[cod]

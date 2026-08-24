@@ -24,6 +24,7 @@ from typing import Any, ClassVar
 from chord.config import Settings
 from chord.skills._geo import geocode
 from chord.skills._http import SkillHTTPError, get_json
+from chord.skills._quota import get_quota_store
 from chord.skills.base import Skill
 
 AIR_QUALITY_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
@@ -139,24 +140,27 @@ class AirQualitySkill(Skill):
     async def _fetch_report(self, location: dict[str, Any]) -> AirReport:
         place = f"{location['name']}, {location['country']}".strip(", ")
         latitude, longitude = location["latitude"], location["longitude"]
+        quota = get_quota_store(self._settings.quota_store_path)
 
         key = self._settings.airkorea_api_key
         if key and location["country"] == "South Korea":
             sido = resolve_sido(location.get("admin1", ""))
             if sido:
                 try:
-                    return await fetch_airkorea(key, place, sido)
+                    return await fetch_airkorea(key, place, sido, quota)
                 except SkillHTTPError:
                     pass  # fall through to the worldwide source
 
-        return await fetch_open_meteo(place, latitude, longitude)
+        return await fetch_open_meteo(place, latitude, longitude, quota)
 
 
 # -- Providers -----------------------------------------------------------------
 
 
-async def fetch_open_meteo(place: str, latitude: float, longitude: float) -> AirReport:
+async def fetch_open_meteo(place: str, latitude: float, longitude: float, quota=None) -> AirReport:
     """Key-less worldwide provider (CAMS model data)."""
+    if quota is not None:
+        quota.require("open_meteo")
     data = await get_json(
         AIR_QUALITY_URL,
         params={
@@ -168,6 +172,8 @@ async def fetch_open_meteo(place: str, latitude: float, longitude: float) -> Air
     current = data.get("current")
     if current is None:
         raise SkillHTTPError("Air-quality API returned no current data.")
+    if quota is not None:
+        quota.record("open_meteo")
     return AirReport(
         place=place,
         pm10_ugm3=_num(current.get("pm10")),
@@ -177,8 +183,10 @@ async def fetch_open_meteo(place: str, latitude: float, longitude: float) -> Air
     )
 
 
-async def fetch_airkorea(api_key: str, place: str, sido_name: str) -> AirReport:
+async def fetch_airkorea(api_key: str, place: str, sido_name: str, quota=None) -> AirReport:
     """Official Korean provider: province-level real-time measurements."""
+    if quota is not None:
+        quota.require("airkorea")
     data = await get_json(
         AIRKOREA_URL,
         params={
@@ -206,6 +214,8 @@ async def fetch_airkorea(api_key: str, place: str, sido_name: str) -> AirReport:
     pm25 = pick("pm25Value")
     if pm10 is None and pm25 is None:
         raise SkillHTTPError("AirKorea returned no usable measurements.")
+    if quota is not None:
+        quota.record("airkorea")
 
     return AirReport(
         place=place,

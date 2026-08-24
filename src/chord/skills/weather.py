@@ -22,6 +22,7 @@ from typing import Any, ClassVar
 from chord.config import Settings
 from chord.skills._geo import geocode
 from chord.skills._http import SkillHTTPError, get_json
+from chord.skills._quota import get_quota_store
 from chord.skills.base import Skill
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
@@ -160,10 +161,13 @@ class WeatherSkill(Skill):
     async def _fetch_report(self, location: dict[str, Any]) -> WeatherReport:
         place = f"{location['name']}, {location['country']}".strip(", ")
         latitude, longitude = location["latitude"], location["longitude"]
+        quota = get_quota_store(self._settings.quota_store_path)
 
         if self._settings.kma_api_key and in_korea(latitude, longitude):
             try:
-                return await fetch_kma(self._settings.kma_api_key, place, latitude, longitude)
+                return await fetch_kma(
+                    self._settings.kma_api_key, place, latitude, longitude, quota
+                )
             except SkillHTTPError:
                 # Official data hiccup -> fall through to the next source.
                 pass
@@ -175,11 +179,12 @@ class WeatherSkill(Skill):
                     place,
                     latitude,
                     longitude,
+                    quota,
                 )
             except SkillHTTPError:
                 pass
 
-        return await fetch_open_meteo(place, latitude, longitude)
+        return await fetch_open_meteo(place, latitude, longitude, quota)
 
 
 # ---------------------------------------------------------------------------
@@ -187,8 +192,12 @@ class WeatherSkill(Skill):
 # ---------------------------------------------------------------------------
 
 
-async def fetch_open_meteo(place: str, latitude: float, longitude: float) -> WeatherReport:
+async def fetch_open_meteo(
+    place: str, latitude: float, longitude: float, quota=None
+) -> WeatherReport:
     """Key-less default provider."""
+    if quota is not None:
+        quota.require("open_meteo")
     data = await get_json(
         OPEN_METEO_URL,
         params={
@@ -208,6 +217,8 @@ async def fetch_open_meteo(place: str, latitude: float, longitude: float) -> Wea
     current = data.get("current")
     if not current:
         raise SkillHTTPError("Weather API returned no current data.")
+    if quota is not None:
+        quota.record("open_meteo")
     return WeatherReport(
         place=place,
         condition=describe_weather_code(current.get("weather_code")),
@@ -220,9 +231,11 @@ async def fetch_open_meteo(place: str, latitude: float, longitude: float) -> Wea
 
 
 async def fetch_weatherapi(
-    api_key: str, place: str, latitude: float, longitude: float
+    api_key: str, place: str, latitude: float, longitude: float, quota=None
 ) -> WeatherReport:
     """Worldwide provider via WeatherAPI.com."""
+    if quota is not None:
+        quota.require("weatherapi")
     data = await get_json(
         WEATHERAPI_URL,
         params={"key": api_key, "q": f"{latitude},{longitude}", "aqi": "no"},
@@ -230,6 +243,8 @@ async def fetch_weatherapi(
     current = data.get("current") or {}
     if not current:
         raise SkillHTTPError("WeatherAPI returned no current data.")
+    if quota is not None:
+        quota.record("weatherapi")
     condition_block = current.get("condition") or {}
     return WeatherReport(
         place=place,
@@ -242,8 +257,12 @@ async def fetch_weatherapi(
     )
 
 
-async def fetch_kma(api_key: str, place: str, latitude: float, longitude: float) -> WeatherReport:
-    """Official Korean provider: KMA ultra-short-term observation (기상청 초단기실황)."""
+async def fetch_kma(
+    api_key: str, place: str, latitude: float, longitude: float, quota=None
+) -> WeatherReport:
+    """Official Korean provider: KMA ultra-short-term observation."""
+    if quota is not None:
+        quota.require("kma")
     nx, ny = to_grid(latitude, longitude)
     base_date, base_time = kma_base_timestamp()
     data = await get_json(
@@ -264,6 +283,8 @@ async def fetch_kma(api_key: str, place: str, latitude: float, longitude: float)
     observations = {str(item.get("category")): item.get("obsrValue") for item in items}
     if not observations:
         raise SkillHTTPError("KMA returned no observation items.")
+    if quota is not None:
+        quota.record("kma")
 
     temperature = _num(observations.get("T1H"))
     humidity = _num(observations.get("REH"))

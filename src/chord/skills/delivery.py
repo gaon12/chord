@@ -17,6 +17,8 @@ alias table.
 
 from __future__ import annotations
 
+import dataclasses
+import logging
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -31,6 +33,7 @@ from chord.skills._http import (
     get_json,
     get_text,
 )
+from chord.skills._quota import get_quota_store
 from chord.skills.base import Skill
 
 # ---------------------------------------------------------------------------
@@ -90,6 +93,8 @@ SWEETTRACKER_NAMES = {
     "lotte": "Lotte",
 }
 SWEETTRACKER_URL = "https://tracking.sweettracker.co.kr/api/v1/trackingInfo"
+
+logger = logging.getLogger(__name__)
 
 _ROW_RE = re.compile(r"<tr[^>]*>(.*?)</tr>", re.S)
 _CELL_RE = re.compile(r"<td[^>]*>(.*?)</td>", re.S)
@@ -217,19 +222,55 @@ class SweetTrackerCarrier(Carrier):
 
     Preferred over the site scrapers because it covers many carriers
     (CJ, 우체국, 한진, 로젠, 롯데, ...) behind one normalized API.
+
+    Quota rules enforced here:
+    * 100 lookups per month (shared bucket ``sweettracker``).
+    * The SAME waybill number may only be queried 10 times per day;
+      repeat requests are answered from the cached last result instead
+      of spending another paid lookup.
     """
 
     id = "sweettracker"
 
-    def __init__(self, api_key: str, company_code: str, display_name: str) -> None:
+    #: SweetTracker rejects more than 10 queries for one waybill/day.
+    PER_NUMBER_DAILY_LIMIT = 10
+
+    def __init__(
+        self,
+        api_key: str,
+        company_code: str,
+        display_name: str,
+        settings=None,
+    ) -> None:
         self._api_key = api_key
         self.company_code = company_code
         self.name = display_name
+        self._settings = settings
 
     def tracking_url(self, number: str) -> str:
         return f"https://tracking.sweettracker.co.kr/?t_code={self.company_code}&t_invoice={number}"
 
     async def track(self, number: str) -> list[TrackingEvent]:
+        store = (
+            get_quota_store(self._settings.quota_store_path) if self._settings is not None else None
+        )
+        cache_key = f"sweettracker#{number}"
+
+        # Same-number daily rule: serve repeats from today's cache.
+        if store is not None and store.daily_count(cache_key) >= self.PER_NUMBER_DAILY_LIMIT:
+            cached = store.get_cached(cache_key)
+            if cached is not None:
+                logger.info("Serving cached tracking for %s (daily limit reached).", number)
+                return [TrackingEvent(**item) for item in cached]
+            raise SkillHTTPError(
+                f"Waybill {number} was already looked up "
+                f"{self.PER_NUMBER_DAILY_LIMIT} times today. Try again tomorrow."
+            )
+
+        if store is not None:
+            store.require("sweettracker")
+            store.bump_daily(cache_key)
+
         data = await get_json(
             SWEETTRACKER_URL,
             params={
@@ -255,6 +296,10 @@ class SweetTrackerCarrier(Carrier):
             raise SkillHTTPError(
                 f"No tracking records found at {self.name} for '{number}'. Check the number."
             )
+
+        if store is not None:
+            store.record("sweettracker")
+            store.put_cached(cache_key, [dataclasses.asdict(event) for event in events])
         return events
 
 
@@ -308,7 +353,7 @@ CARRIER_ALIASES: dict[str, str] = {
 }
 
 
-def resolve_carrier(name: str, sweettracker_api_key: str = "") -> Carrier:
+def resolve_carrier(name: str, settings=None) -> Carrier:
     """Look up a carrier by id or alias.
 
     When a SweetTracker API key is configured and the carrier is one
@@ -320,12 +365,14 @@ def resolve_carrier(name: str, sweettracker_api_key: str = "") -> Carrier:
         supported = ", ".join(sorted(set(CARRIER_ALIASES)))
         raise SkillHTTPError(f"Unknown carrier '{name}'. Supported: {supported}.")
 
+    sweettracker_api_key = getattr(settings, "sweettracker_api_key", "") or ""
     company_code = SWEETTRACKER_COMPANY_CODES.get(key)
     if sweettracker_api_key and company_code:
         return SweetTrackerCarrier(
             api_key=sweettracker_api_key,
             company_code=company_code,
             display_name=SWEETTRACKER_NAMES[key],
+            settings=settings,
         )
 
     scraper_classes = {"cj": CJLogisticsCarrier, "post": KoreaPostCarrier}
@@ -388,6 +435,6 @@ class DeliverySkill(Skill):
         if not number:
             raise SkillHTTPError(f"'{tracking_number}' does not look like a tracking number.")
 
-        resolved = resolve_carrier(carrier, self._settings.sweettracker_api_key)
+        resolved = resolve_carrier(carrier, self._settings)
         events = await resolved.track(number)
         return format_tracking(resolved, number, events)

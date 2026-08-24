@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 import respx
 
+import quota_helpers
 from chord.config import Settings
 from chord.skills._http import SkillHTTPError
 from chord.skills.flight import FlightSkill, parse_states
@@ -278,3 +279,17 @@ async def test_aviationstack_error_falls_back_to_radar():
     result = await FlightSkill(settings).run(callsign="KAL801")
 
     assert "airborne" in result
+
+
+@respx.mock
+async def test_exhausted_aviationstack_falls_back_to_radar():
+    quota_helpers.prefill_quota("aviationstack", 100)
+    aviation_route = respx.get(AVIATIONSTACK_URL).respond(json={"data": []})
+    respx.get(OPENSKY_URL).respond(json=_opensky_payload([_state()]))
+    respx.get(ADSBDB_URL).respond(status_code=404)
+
+    settings = _settings(aviationstack_api_key="secret")
+    result = await FlightSkill(settings).run(callsign="KAL801")
+
+    assert not aviation_route.called  # quota checked before any request
+    assert "airborne" in result  # radar data used instead

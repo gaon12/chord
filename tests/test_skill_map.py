@@ -6,6 +6,7 @@ import httpx
 import pytest
 import respx
 
+import quota_helpers
 from chord.config import Settings
 from chord.skills._http import SkillHTTPError
 from chord.skills.map import (
@@ -161,3 +162,24 @@ async def test_directions_no_route_raises_readable_error():
 
     with pytest.raises(SkillHTTPError, match="no driving route"):
         await GetDirectionsSkill(_settings()).run(origin="A", destination="B")
+
+
+@respx.mock
+async def test_exhausted_kakao_quota_falls_back_to_osm():
+    quota_helpers.prefill_quota("kakao_map", 300_000)
+    respx.get(GEO_URL).respond(json=_geocode())
+    kakao_route = respx.get(KAKAO_KEYWORD_URL).respond(json=_kakao_places())
+    respx.get(NOMINATIM_URL).respond(
+        json=[
+            {
+                "name": "Starbucks Gangnam",
+                "display_name": "Starbucks, Gangnam, Seoul, South Korea",
+            }
+        ]
+    )
+
+    settings = _settings(kakao_rest_api_key="secret")
+    result = await FindPlacesSkill(settings).run(query="starbucks gangnam seoul")
+
+    assert not kakao_route.called  # quota checked before any request
+    assert "[via OpenStreetMap]" in result
