@@ -174,10 +174,14 @@ class Settings(BaseSettings):
     #: Markdown file defining the bot's character (system prompt body).
     persona_path: Path = Path("persona.md")
 
-    #: Font used for chart labels. Leave empty to search the usual
-    #: system locations; set it when charts come out with Korean text
-    #: missing, which means no Hangul-capable font was found.
+    #: Font used for chart labels. Leave empty to use Noto Sans KR,
+    #: downloaded once into ``font_cache_dir``; set it to use a font of
+    #: your own and skip the download entirely.
     chart_font_path: Path | None = None
+
+    #: Where the downloaded chart font is cached. One file, fetched on
+    #: the first chart and reused forever after.
+    font_cache_dir: Path = Path(".cache/fonts")
 
     #: SQLite database for reminders (also exposed via the sqlite MCP).
     reminder_db_path: Path = Path("chord.db")

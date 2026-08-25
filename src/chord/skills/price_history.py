@@ -30,6 +30,7 @@ from typing import ClassVar
 from chord.attachments import attach
 from chord.charts import format_precise, render_line_chart
 from chord.config import Settings
+from chord.fonts import ensure_font
 from chord.skills._http import SkillHTTPError, get_json
 from chord.skills.base import Skill
 
@@ -107,7 +108,7 @@ class PriceHistorySkill(Skill):
     }
 
     def __init__(self, settings: Settings) -> None:
-        self._font_path = str(settings.chart_font_path) if settings.chart_font_path else None
+        self._settings = settings
 
     async def run(self, kind: str, symbol: str, days: int = DEFAULT_DAYS) -> str:
         kind = (kind or "").strip().lower()
@@ -123,9 +124,12 @@ class PriceHistorySkill(Skill):
                 f"'{symbol}' - not enough to chart. Try a longer period."
             )
 
-        return _summarize(series, self._attach_chart(series, kind))
+        # Resolved here rather than in the renderer because the first
+        # call may download the font, and that has to be awaited.
+        font_path = await ensure_font(self._settings)
+        return _summarize(series, self._attach_chart(series, kind, font_path))
 
-    def _attach_chart(self, series: Series, kind: str) -> bool:
+    def _attach_chart(self, series: Series, kind: str, font_path: str | None) -> bool:
         """Render and attach the chart; False if it could not be sent.
 
         A drawing failure must never cost the answer - the numbers in
@@ -137,7 +141,7 @@ class PriceHistorySkill(Skill):
                 series.points,
                 title=series.title,
                 subtitle=series.subtitle,
-                font_path=self._font_path,
+                font_path=font_path,
             )
         except Exception:  # noqa: BLE001 - the text answer still stands
             logger.exception("Could not render the %s chart for %s", kind, series.title)

@@ -11,6 +11,9 @@ mcp.json
 usage.json
 chord.db
 
+# Downloaded chart font (Noto Sans KR), refetched on demand.
+.cache/
+
 # Locally installed MCP server binaries (rhwp release download).
 tools/
 

@@ -184,21 +184,31 @@ The numbers go to the model as text (latest, first, low, high, change);
 only the image is attached. The model is told it cannot see the picture,
 so it points you at it instead of inventing a shape for it.
 
-**Korean labels.** Chart text is drawn with a font found on the host:
-`malgun.ttf` on Windows, AppleSDGothicNeo on macOS, Noto Sans CJK or
-NanumGothic on Linux. If none is found the bot logs a warning and draws
-the labels in ASCII only — Korean is dropped rather than rendered as
-tofu boxes, so `USD/KRW · 달러/원 환율` becomes `USD/KRW`. Axis numbers are
-always ASCII (`120M`, not `1.2억`) so they survive that fallback. To fix
-it properly, install a Korean font:
+**Korean labels.** Chart text is drawn with **Noto Sans KR**, downloaded
+once (4.6 MB, [OFL](https://openfontlicense.org)) from jsDelivr's mirror
+of Google's `noto-cjk` repo and cached in `FONT_CACHE_DIR`
+(`.cache/fonts` by default). Depending on the host for fonts would mean
+the same bot drawing a different chart on Windows, on a Mac and in a
+container — and no Korean at all on a slim image with no fonts
+installed.
 
-```bash
-sudo apt install fonts-nanum      # Debian/Ubuntu
-```
+The font is resolved once per process, in this order:
 
-or point `CHART_FONT_PATH` at any `.ttf`/`.otf`/`.ttc` that covers
-Hangul. A path that does not exist logs a warning and falls back to the
-search rather than failing silently.
+1. `CHART_FONT_PATH`, if it names a font Pillow can open. Setting it
+   skips the download entirely — which is also how you keep the bot off
+   the network.
+2. The cached copy in `FONT_CACHE_DIR`.
+3. A fresh download, streamed to a `.part` file and moved into place
+   only after it loads as a font, so a captive portal's login page can
+   never become the cached "font".
+4. Whatever Hangul font the host has (`malgun.ttf`, AppleSDGothicNeo,
+   Noto CJK, NanumGothic).
+
+If every step fails — offline host, no fonts installed — the bot logs a
+warning and draws labels in ASCII only: Korean is dropped rather than
+rendered as tofu boxes, so `USD/KRW · 달러/원 환율` becomes `USD/KRW`. Axis
+numbers are always ASCII (`120M`, not `1.2억`) so they survive that
+fallback. Delete `.cache/fonts` to force a re-download.
 
 Rendering uses Pillow, not matplotlib: one polyline does not justify
 numpy, and an explicit font path is exactly what makes the 글자 깨짐

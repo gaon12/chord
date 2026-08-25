@@ -29,6 +29,16 @@ def _skill() -> PriceHistorySkill:
     return PriceHistorySkill(Settings(_env_file=None, discord_token="t", openai_api_key="k"))
 
 
+@pytest.fixture(autouse=True)
+def offline_font(monkeypatch):
+    """No test downloads a font; chord.fonts has its own tests for that."""
+
+    async def no_font(_settings):
+        return None
+
+    monkeypatch.setattr("chord.skills.price_history.ensure_font", no_font)
+
+
 @pytest.fixture
 def turn():
     """A collecting chat turn, so attachments have somewhere to land."""
