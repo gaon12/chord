@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import contextlib
 
+import discord
+
 import quota_helpers  # noqa: F401  (conftest already isolates quota store)
+from chord.attachments import attach
 from chord.bot import (
     HELP_TEXT,
     ChordBot,
@@ -51,17 +54,24 @@ class FakeChannel:
     def __init__(self, channel_id: int = 100, raises: Exception | None = None):
         self.id = channel_id
         self.sent: list[str] = []
+        #: One entry per send(): the files it carried, if any.
+        self.uploads: list[list] = []
         #: When set, every send() raises it (permission / HTTP failures).
         self.raises = raises
+        #: When set, only sends carrying files raise it.
+        self.rejects_files: Exception | None = None
 
     @contextlib.asynccontextmanager
     async def typing(self):
         yield None
 
-    async def send(self, content: str):
+    async def send(self, content: str, files=None):
         if self.raises is not None:
             raise self.raises
+        if files and self.rejects_files is not None:
+            raise self.rejects_files
         self.sent.append(content)
+        self.uploads.append(list(files or []))
 
 
 class FakeAuthor:
@@ -94,6 +104,13 @@ class FakeMessage:
         self.role_mentions = list(role_mentions)
         self.guild = guild
         self.reference = reference
+
+
+class _FakeResponse:
+    """Just enough of an aiohttp response for discord.HTTPException."""
+
+    status = 413
+    reason = "Payload Too Large"
 
 
 class FakeUser:
@@ -398,6 +415,83 @@ async def test_reply_to_bot_message_triggers_response():
     assert len(engine.calls) == 1
     assert "explain this" in engine.calls[0][0]
     assert "Here's the weather data" in engine.calls[0][0]  # reply context
+
+
+# -- Skill-produced attachments ---------------------------------------------------------
+
+
+class AttachingEngine(StubEngine):
+    """An engine whose skills drop a file in, the way a chart skill does."""
+
+    def __init__(self, answer: str = "answer!", count: int = 1):
+        super().__init__()
+        self.answer = answer
+        self.count = count
+
+    async def reply(self, user_text, history):
+        for index in range(self.count):
+            attach(f"chart{index}.png", b"\x89PNG fake")
+        self.calls.append((user_text, history))
+        return (self.answer, [{"role": "user", "content": user_text}])
+
+
+async def test_a_chart_produced_by_a_skill_reaches_the_channel():
+    bot, _ = _bot()
+    bot._engine = AttachingEngine()
+    channel = FakeChannel()
+
+    await bot.on_message(FakeMessage("<@999> 환율 그래프", channel, mentions=[FakeUser(999)]))
+
+    assert channel.sent == ["answer!"]
+    assert [f.filename for f in channel.uploads[0]] == ["chart0.png"]
+
+
+async def test_files_ride_on_the_last_chunk_of_a_long_answer():
+    """The image belongs under the whole answer, not halfway through it."""
+    bot, _ = _bot()
+    bot._engine = AttachingEngine(answer="\n\n".join(["x" * 1500, "y" * 1500]))
+    channel = FakeChannel()
+
+    await bot.on_message(FakeMessage("<@999> hi", channel, mentions=[FakeUser(999)]))
+
+    assert len(channel.sent) == 2
+    assert channel.uploads[0] == []
+    assert [f.filename for f in channel.uploads[1]] == ["chart0.png"]
+
+
+async def test_a_rejected_upload_does_not_cost_the_user_the_answer():
+    """The numbers are the answer; the chart is the nice-to-have."""
+    bot, _ = _bot()
+    bot._engine = AttachingEngine()
+    channel = FakeChannel()
+    channel.rejects_files = discord.HTTPException(_FakeResponse(), "payload too large")
+
+    await bot.on_message(FakeMessage("<@999> hi", channel, mentions=[FakeUser(999)]))
+
+    assert channel.sent == ["answer!"]
+    assert channel.uploads == [[]]  # retried without the file
+
+
+async def test_files_do_not_leak_into_the_next_turn():
+    bot, _ = _bot()
+    bot._engine = AttachingEngine()
+    channel = FakeChannel()
+
+    await bot.on_message(FakeMessage("<@999> one", channel, mentions=[FakeUser(999)]))
+    bot._engine = StubEngine()  # a turn whose skills attach nothing
+    await bot.on_message(FakeMessage("<@999> two", channel, mentions=[FakeUser(999)]))
+
+    assert channel.uploads[1] == []
+
+
+async def test_a_plain_answer_sends_no_upload_argument():
+    """Every provider path stays exactly as it was when there is no file."""
+    bot, _ = _bot()
+    channel = FakeChannel()
+
+    await bot.on_message(FakeMessage("<@999> hi", channel, mentions=[FakeUser(999)]))
+
+    assert channel.uploads == [[]]
 
 
 # -- Tool index in the system prompt ---------------------------------------------------

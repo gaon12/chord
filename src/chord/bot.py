@@ -13,6 +13,7 @@ All conversation logic lives in :mod:`chord.engine`.
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import re
@@ -23,6 +24,7 @@ from discord import app_commands
 from discord.ext import tasks
 from openai import APITimeoutError, BadRequestError, RateLimitError
 
+from chord.attachments import Attachment, collected, reset_attachments, start_collecting
 from chord.compaction import HistoryCompactor
 from chord.config import REASONING_EFFORT_BY_LEVEL, REASONING_LEVELS, Settings
 from chord.context import reset_current_channel, set_current_channel
@@ -606,6 +608,10 @@ class ChordBot(discord.Client):
         channel_id = message.channel.id
         self._engine.system_prompt = self._system_prompt()
         token = set_current_channel(channel_id)
+        # Skills can produce images (charts); they land here rather than
+        # in the tool result the model reads. See chord.attachments.
+        attachment_token = start_collecting()
+        files: list[Attachment] = []
 
         async with message.channel.typing():
             try:
@@ -658,12 +664,18 @@ class ChordBot(discord.Client):
                 await self._send(message.channel, "Sorry — something went wrong on my side.")
                 return
             finally:
+                files = collected()
                 reset_current_channel(token)
+                reset_attachments(attachment_token)
 
         self._store.append(channel_id, *new_messages)
         answer = format_reply(answer)
-        for chunk in split_message(answer):
-            if not await self._send(message.channel, chunk):
+        chunks = split_message(answer)
+        for index, chunk in enumerate(chunks):
+            # Images ride on the last chunk so they appear below the
+            # whole answer rather than interrupting it.
+            attached = files if index == len(chunks) - 1 else None
+            if not await self._send(message.channel, chunk, attached):
                 break
         await self._compact_history(channel_id)
 
@@ -708,7 +720,12 @@ class ChordBot(discord.Client):
         else:
             logger.debug("Channel %s moved on mid-summary; dropping the digest", channel_id)
 
-    async def _send(self, channel: Any, content: str) -> bool:
+    async def _send(
+        self,
+        channel: Any,
+        content: str,
+        files: list[Attachment] | None = None,
+    ) -> bool:
         """Send one message, turning Discord refusals into clear logs.
 
         A missing "Send Messages" permission is otherwise invisible: the
@@ -717,8 +734,9 @@ class ChordBot(discord.Client):
         Returns:
             True when the message actually went out.
         """
+        extra = {"files": _discord_files(files)} if files else {}
         try:
-            await channel.send(content)
+            await channel.send(content, **extra)
             return True
         except discord.Forbidden:
             logger.error(
@@ -730,6 +748,12 @@ class ChordBot(discord.Client):
             logger.exception(
                 "Discord rejected a message in channel %s", getattr(channel, "id", "?")
             )
+            if files:
+                # The text is the answer and the chart is the bonus, so a
+                # rejected upload (too large, bad type, attachment
+                # permission missing) must not take the words with it.
+                logger.warning("Retrying without the %d attachment(s).", len(files))
+                return await self._send(channel, content)
         return False
 
     def _is_me(self, user: Any) -> bool:
@@ -800,6 +824,11 @@ class ChordBot(discord.Client):
             return False
 
         return any(getattr(role, "id", None) in my_role_ids for role in role_mentions)
+
+
+def _discord_files(files: list[Attachment] | None) -> list[discord.File]:
+    """Wrap collected bytes as uploads discord.py understands."""
+    return [discord.File(io.BytesIO(item.data), filename=item.filename) for item in files or ()]
 
 
 def build_bot(settings: Settings) -> ChordBot:
