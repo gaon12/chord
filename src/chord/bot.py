@@ -183,6 +183,24 @@ def build_reply_context(message: discord.Message) -> str:
     return f'[replying to {display_name}: "{text}"]\n'
 
 
+def channel_is_nsfw(channel: Any) -> bool:
+    """Whether Discord has this channel marked age-restricted.
+
+    ``is_nsfw()`` exists on guild channels and threads but not on DMs,
+    and a stray implementation could raise, so a missing or unhappy flag
+    reads as "not marked" - the answer that keeps adult content out of
+    an ordinary channel rather than into it.
+    """
+    check = getattr(channel, "is_nsfw", None)
+    if not callable(check):
+        return False
+    try:
+        return bool(check())
+    except Exception:  # noqa: BLE001 - an unreadable flag is not a marked channel
+        logger.debug("Could not read the NSFW flag for channel %s", getattr(channel, "id", "?"))
+        return False
+
+
 #: Files listed per message. Someone dumping twenty screenshots is not
 #: asking about all twenty, and each line costs prompt.
 MAX_LISTED_ATTACHMENTS = 4
@@ -648,7 +666,11 @@ class ChordBot(discord.Client):
 
         channel_id = message.channel.id
         self._engine.system_prompt = self._system_prompt()
-        token = set_current_channel(channel_id)
+        token = set_current_channel(
+            channel_id,
+            nsfw=channel_is_nsfw(message.channel),
+            is_dm=message.guild is None,
+        )
         # Skills can produce images (charts); they land here rather than
         # in the tool result the model reads. See chord.attachments.
         attachment_token = start_collecting()

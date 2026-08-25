@@ -36,6 +36,7 @@ tools when a question needs real-world data.
 | News headlines | `get_news` | 연합뉴스 RSS · Google News RSS | - (key-less) |
 | Random utilities | `random_pick` | dice / coin / number / pick / shuffle | - |
 | Self-description | `list_capabilities` | the live tool registry | - |
+| Doujinshi search | `search_hitomi` | hitomi.la index (metadata only, NSFW channels/DMs) | - |
 | QR codes | `make_qr`, `read_qr` | qrcode + zxing-cpp (local) | - |
 | Reminders | `set_reminder`, `list_reminders` | pure Python (SQLite) | - |
 
@@ -190,6 +191,30 @@ under the server that provided them.
 `/tools` prints the same listing as names only — which is also the
 fastest way to see what an MCP server really exposed, without turning on
 DEBUG logging.
+
+### Doujinshi search (age-restricted)
+
+`search_hitomi` searches hitomi.la by tag, artist, series, character,
+group or type and returns the newest matches as **metadata**: title,
+artist, series, tags, page count and the gallery link. It does not
+fetch, mirror or post images.
+
+It answers only in channels Discord has marked age-restricted, and in
+DMs. That is Discord's own rule about where adult content may be posted
+— a server that puts it in an ordinary channel is a server that gets
+reported — so the gate reads the channel's NSFW flag rather than
+guessing. Out of band, with no channel bound at all, the answer is no.
+
+The site is a single-page app with no search API: the browser downloads
+binary index files and filters them itself. Those files are the API.
+`{area}/{name}-{language}.nozomi` is a flat array of big-endian int32
+gallery ids, newest first, so the newest N results are the first 4N
+bytes — one ranged request instead of a multi-megabyte download. Each id
+then resolves through `galleries/{id}.js`, which is JSON behind a `var`
+assignment.
+
+Language defaults to Korean; `한국어`, `kr`, `일본어`, `전체` and friends are
+accepted as aliases.
 
 ### QR codes
 

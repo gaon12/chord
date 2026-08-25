@@ -13,6 +13,7 @@ from chord.bot import (
     ChordBot,
     build_attachment_context,
     build_reply_context,
+    channel_is_nsfw,
     clean_message_text,
     estimate_tool_prompt_tokens,
     format_reply,
@@ -23,6 +24,7 @@ from chord.bot import (
 )
 from chord.compaction import SUMMARY_PREFIX, HistoryCompactor
 from chord.config import REASONING_LEVELS, Settings
+from chord.context import channel_allows_age_restricted
 from chord.skills.registry import SkillRegistry
 from fakes import FakeLLM
 
@@ -309,6 +311,86 @@ async def test_history_is_passed_to_engine_and_updated():
 
     _, history_on_second = engine.calls[1]
     assert any(m.get("content") == "[user]: one" for m in history_on_second)
+
+
+# -- Age-restricted channels -------------------------------------------------------------
+
+
+class NsfwChannel(FakeChannel):
+    def is_nsfw(self):
+        return True
+
+
+class AngryChannel(FakeChannel):
+    def is_nsfw(self):
+        raise RuntimeError("the flag is not readable")
+
+
+def test_a_marked_channel_reads_as_nsfw():
+    assert channel_is_nsfw(NsfwChannel()) is True
+
+
+def test_an_ordinary_channel_does_not():
+    assert channel_is_nsfw(FakeChannel()) is False
+
+
+def test_a_channel_without_the_flag_is_not_marked():
+    """DM channels have no is_nsfw() at all."""
+    assert channel_is_nsfw(object()) is False
+
+
+def test_an_unreadable_flag_keeps_adult_content_out():
+    """The failure mode has to be "not marked", never "marked"."""
+    assert channel_is_nsfw(AngryChannel()) is False
+
+
+async def test_the_turn_knows_it_is_in_a_marked_channel():
+    seen = {}
+
+    class PeekingEngine(StubEngine):
+        async def reply(self, user_text, history):
+            seen["allowed"] = channel_allows_age_restricted()
+            return await super().reply(user_text, history)
+
+    bot, _ = _bot()
+    bot._engine = PeekingEngine()
+    await bot.on_message(
+        FakeMessage("<@999> hi", NsfwChannel(), mentions=[FakeUser(999)], guild="g")
+    )
+
+    assert seen["allowed"] is True
+
+
+async def test_an_ordinary_guild_channel_is_not_unlocked():
+    seen = {}
+
+    class PeekingEngine(StubEngine):
+        async def reply(self, user_text, history):
+            seen["allowed"] = channel_allows_age_restricted()
+            return await super().reply(user_text, history)
+
+    bot, _ = _bot()
+    bot._engine = PeekingEngine()
+    await bot.on_message(
+        FakeMessage("<@999> hi", FakeChannel(), mentions=[FakeUser(999)], guild="g")
+    )
+
+    assert seen["allowed"] is False
+
+
+async def test_a_dm_is_treated_as_age_restricted():
+    seen = {}
+
+    class PeekingEngine(StubEngine):
+        async def reply(self, user_text, history):
+            seen["allowed"] = channel_allows_age_restricted()
+            return await super().reply(user_text, history)
+
+    bot, _ = _bot()
+    bot._engine = PeekingEngine()
+    await bot.on_message(FakeMessage("hi", FakeChannel()))  # no guild -> DM
+
+    assert seen["allowed"] is True
 
 
 # -- Uploaded files --------------------------------------------------------------------
