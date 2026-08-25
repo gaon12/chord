@@ -41,7 +41,14 @@ def _iter_skill_classes():
         name = module_info.name
         if name.startswith("_") or name in {"registry", "base"}:
             continue  # private helpers / infrastructure
-        module = importlib.import_module(f".{name}", __package__)
+        try:
+            module = importlib.import_module(f".{name}", __package__)
+        except Exception:  # noqa: BLE001 - one broken plugin != broken bot
+            # A skill that needs a third-party library (Pillow, for the
+            # charts) must not take the whole bot down with it when that
+            # library is missing from the environment.
+            logger.exception("Skipping skill module %s (import failed).", name)
+            continue
         for attr_name, attr_value in vars(module).items():
             if (
                 inspect.isclass(attr_value)
@@ -85,6 +92,10 @@ def create_default_registry(settings: Settings) -> SkillRegistry:
       ``Skill``
     * ``settings`` / ``llm`` constructor parameters are injected
       automatically (one shared LLMService instance)
+
+    A module that will not import, or a skill that will not construct,
+    is logged and skipped. Losing one tool is a degraded bot; refusing
+    to start is no bot at all.
     """
     registry = SkillRegistry()
     llm = LLMService(settings)
