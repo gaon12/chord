@@ -26,7 +26,8 @@ from chord.skills.base import Skill
 
 logger = logging.getLogger(__name__)
 
-NL_SEARCH_URL = "https://www.nl.go.kr/NL/search/openApi/search.do"
+NL_BASE = "https://www.nl.go.kr"
+NL_SEARCH_URL = f"{NL_BASE}/NL/search/openApi/search.do"
 GOOGLE_BOOKS_URL = "https://www.googleapis.com/books/v1/volumes"
 OPENLIBRARY_SEARCH_URL = "https://openlibrary.org/search.json"
 
@@ -95,6 +96,19 @@ def _clamp_limit(limit: object) -> int:
 # -- 국립중앙도서관 ------------------------------------------------------------------
 
 
+def _absolute_nl_link(link: str) -> str:
+    """Make a National Library detail link clickable.
+
+    It hands back site-relative paths - "/NL/contents/search.do#viewKey=..."
+    - which are a dead string in a chat window.
+    """
+    if not link:
+        return ""
+    if link.startswith(("http://", "https://")):
+        return link
+    return f"{NL_BASE}/{link.lstrip('/')}"
+
+
 async def search_nl(query: str, limit: int, settings: Settings) -> list[Book]:
     """National Library of Korea. Needs a key; best for Korean books."""
     key = (settings.nl_api_key or "").strip()
@@ -106,7 +120,12 @@ async def search_nl(query: str, limit: int, settings: Settings) -> list[Book]:
         params={
             "key": key,
             "apiType": "json",
-            "srchTarget": "total",
+            # Without this the search covers the whole collection, and a
+            # book query comes back led by journal articles and archived
+            # news clippings about the book. srchTarget looks like the
+            # knob for that and is simply ignored - the same 237 results
+            # for every value - so category is the one that works.
+            "category": "도서",
             "kwd": query,
             "pageNum": 1,
             "pageSize": limit,
@@ -124,7 +143,7 @@ async def search_nl(query: str, limit: int, settings: Settings) -> list[Book]:
             publisher=_clean(row.get("pubInfo"), 40),
             year=_clean(row.get("pubYearInfo"), 10),
             isbn=_clean(row.get("isbn"), 20),
-            url=_clean(row.get("detailLink"), 200),
+            url=_absolute_nl_link(_clean(row.get("detailLink"), 200)),
         )
         for row in (data.get("result") or [])[:limit]
         if isinstance(row, dict)

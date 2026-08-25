@@ -10,6 +10,7 @@ from chord.skills._http import SkillHTTPError
 from chord.skills.books import (
     GOOGLE_BOOKS_URL,
     MAX_LIMIT,
+    NL_BASE,
     NL_SEARCH_URL,
     OPENLIBRARY_SEARCH_URL,
     Book,
@@ -35,7 +36,7 @@ def _nl_body(count: int = 1) -> dict:
                 "pubInfo": "인사이트",
                 "pubYearInfo": "2013",
                 "isbn": "9788966260959",
-                "detailLink": "https://www.nl.go.kr/detail/1",
+                "detailLink": "/NL/detail/1",
             }
         ]
         * count,
@@ -255,3 +256,35 @@ async def test_the_isbn_13_is_preferred_over_the_isbn_10():
     result = await _skill().run(query="clean code")
 
     assert "ISBN 9780132350884" in result
+
+
+@respx.mock
+async def test_a_relative_national_library_link_is_made_clickable():
+    """It returns site-relative paths, which are a dead string in Discord."""
+    respx.get(NL_SEARCH_URL).respond(json=_nl_body())
+
+    result = await _skill(nl_api_key="nl-key").run(query="클린 코드")
+
+    assert f"{NL_BASE}/NL/detail/1" in result
+
+
+@respx.mock
+async def test_an_absolute_link_is_left_alone():
+    body = _nl_body()
+    body["result"][0]["detailLink"] = "https://www.nl.go.kr/NL/already/absolute"
+    respx.get(NL_SEARCH_URL).respond(json=body)
+
+    result = await _skill(nl_api_key="nl-key").run(query="클린 코드")
+
+    assert "https://www.nl.go.kr/NL/already/absolute" in result
+    assert "www.nl.go.kr/https" not in result
+
+
+@respx.mock
+async def test_the_national_library_is_asked_for_books_only():
+    """Unfiltered, a book query comes back led by journal articles."""
+    route = respx.get(NL_SEARCH_URL).respond(json=_nl_body())
+
+    await _skill(nl_api_key="nl-key").run(query="클린 코드")
+
+    assert route.calls.last.request.url.params["category"] == "도서"
