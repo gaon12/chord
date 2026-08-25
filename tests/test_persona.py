@@ -102,6 +102,13 @@ def test_routing_covers_stored_state_and_mcp_resources():
     assert "MCP resource" in rules
 
 
+def test_routing_says_snippets_are_not_sources():
+    """Expanding a two-line preview into a paragraph is how wrong answers start."""
+    rules = tool_routing_rules()
+    assert "preview, not a source" in rules
+    assert "read_pages" in rules
+
+
 def test_routing_forbids_faking_a_lookup():
     rules = tool_routing_rules()
     assert "never say you looked something up when you did not" in rules

@@ -19,7 +19,7 @@ tools when a question needs real-world data.
 | Stock prices | `get_stock_price` | Yahoo Finance | - (key-less) |
 | Parcel tracking | `track_parcel` | SweetTracker 스마트택배 | CJ/우체국 site scraping |
 | Flight info | `get_flight_info` | Aviationstack | OpenSky radar + adsbdb |
-| Web search | `web_search` | DuckDuckGo lite | - (key-less) |
+| Web search | `web_search` | DuckDuckGo lite (+ opens the results) | - (key-less) |
 | Read a link | `read_url` | any http(s) page | - (key-less) |
 | Places | `find_places` | Kakao Local (Korea) | OpenStreetMap Nominatim |
 | Directions | `get_directions` | Kakao Navi (Korea) | OSRM demo server |
@@ -175,6 +175,30 @@ rather than showing a level that does nothing.
 Chain-of-thought that a model prints into its answer (`<thought>...`,
 `<think>...`) is stripped before sending, so the reasoning never reaches
 the channel. Text inside fenced code blocks is left alone.
+
+### Searching, then actually reading
+
+`web_search` returns titles, links and DuckDuckGo's two-line snippets.
+A snippet is a preview chosen for a human deciding what to click, so
+answering from one means answering from an advertisement for the answer.
+Pass `read_pages` (1–3) and the skill opens that many of the top results
+in parallel and returns their text as well — the difference between
+finding a page about something and knowing what it says.
+
+Each opened page is capped at ~1200 characters, far below what `read_url`
+returns for a single link: this text is multiplied by the page count and
+every character stays in the channel history to be re-sent with each
+later message. A result that 404s or needs JavaScript is reported inline
+and does not cost the other results.
+
+The system prompt tells the model the rule directly — *if the answer is
+not literally in the snippets, open the pages* — because a model that
+treats snippets as sources writes confident paragraphs out of two lines
+of preview text.
+
+> DuckDuckGo rate-limits bursts and will occasionally serve a "confirm
+> you are human" page instead of results. The bot reports that as what
+> it is and the next attempt a few minutes later usually works.
 
 ### Reading links
 

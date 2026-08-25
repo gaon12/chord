@@ -1,22 +1,16 @@
 """Tests for the read-a-link skill and its guarded fetcher.
 
-The address check calls ``socket.getaddrinfo`` directly, which respx
-cannot intercept, so DNS is stubbed for every test here. That keeps the
-suite offline as promised - and makes the blocking tests mean what they
-claim: without it, "a redirect to a private address is refused" would
-pass on a host where the *first* name simply failed to resolve.
+DNS is stubbed suite-wide in conftest (the address check calls
+getaddrinfo directly, which respx cannot intercept), so the hostnames
+here resolve to whatever FAKE_DNS says and nothing touches a resolver.
 """
 
 from __future__ import annotations
-
-import ipaddress
-import socket
 
 import httpx
 import pytest
 import respx
 
-from chord.skills import _fetch
 from chord.skills._fetch import (
     MAX_RESPONSE_BYTES,
     FetchedPage,
@@ -48,29 +42,6 @@ ARTICLE_HTML = """
   </body>
 </html>
 """
-
-
-#: What the fake resolver knows. Everything else is NXDOMAIN.
-FAKE_DNS = {
-    "example.com": "93.184.216.34",
-    "evil.example": "93.184.216.35",
-    "localhost": "127.0.0.1",
-    "internal.example": "10.1.2.3",
-}
-
-
-@pytest.fixture(autouse=True)
-def fake_dns(monkeypatch):
-    def getaddrinfo(host, *_args, **_kwargs):
-        try:  # an IP literal resolves to itself
-            address = str(ipaddress.ip_address(host))
-        except ValueError:
-            if host not in FAKE_DNS:
-                raise socket.gaierror(f"no fake record for {host}") from None
-            address = FAKE_DNS[host]
-        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, 0))]
-
-    monkeypatch.setattr(_fetch.socket, "getaddrinfo", getaddrinfo)
 
 
 def _page(text: str, content_type: str = "text/html; charset=utf-8") -> FetchedPage:
