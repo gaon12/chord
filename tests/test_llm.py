@@ -14,7 +14,14 @@ from openai import BadRequestError
 from openai.types.chat import ChatCompletion
 
 from chord.config import Settings
-from chord.llm import LLMService, create_client, is_reasoning_rejection
+from chord.llm import (
+    GEMINI_HARM_CATEGORIES,
+    LLMService,
+    build_extra_body,
+    create_client,
+    is_reasoning_rejection,
+    merge_extra_body,
+)
 
 API_BASE = "http://llm.test/v1"
 
@@ -289,3 +296,133 @@ def test_client_carries_the_configured_timeout():
     """A stalled provider must fail fast enough to still be answerable."""
     settings = _settings().model_copy(update={"llm_timeout_seconds": 45.0})
     assert create_client(settings).timeout == 45.0
+
+
+# -- Provider extras (safety filters, escape hatch) -------------------------------------
+
+GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/openai/"
+
+
+def _gemini_settings(**overrides) -> Settings:
+    return _settings().model_copy(update={"openai_base_url": GEMINI_BASE, **overrides})
+
+
+async def test_no_extra_body_is_sent_by_default():
+    """Every provider understands a request that carries no extras."""
+    service, fake = _service(CHAT_RESPONSE)
+
+    await service.complete(messages=[{"role": "user", "content": "hi"}])
+
+    assert "extra_body" not in fake.chat.completions.calls[0]
+
+
+def test_safety_off_asks_gemini_to_stop_blocking_every_category():
+    """A category left out keeps its default, so all of them are listed."""
+    body = build_extra_body(_gemini_settings(llm_safety_filters="off"))
+
+    settings_sent = body["extra_body"]["google"]["safety_settings"]
+    assert {entry["category"] for entry in settings_sent} == set(GEMINI_HARM_CATEGORIES)
+    assert {entry["threshold"] for entry in settings_sent} == {"BLOCK_NONE"}
+
+
+def test_safety_off_is_a_no_op_on_providers_without_the_knob(caplog):
+    """Silently sending Gemini fields to OpenAI would just 400."""
+    with caplog.at_level("WARNING"):
+        body = build_extra_body(_settings().model_copy(update={"llm_safety_filters": "off"}))
+
+    assert body == {}
+    assert "no effect" in caplog.text
+
+
+async def test_safety_off_reaches_the_request():
+    fake = FakeClient(CHAT_RESPONSE)
+    service = LLMService(_gemini_settings(llm_safety_filters="off"), client=fake)
+
+    await service.complete(messages=[{"role": "user", "content": "hi"}])
+
+    sent = fake.chat.completions.calls[0]["extra_body"]
+    assert sent["extra_body"]["google"]["safety_settings"]
+
+
+def test_extra_body_json_is_merged_next_to_the_safety_settings():
+    """A hand-written google.* field must not wipe the ones we generated."""
+    body = build_extra_body(
+        _gemini_settings(
+            llm_safety_filters="off",
+            llm_extra_body='{"extra_body": {"google": {"cached_content": "abc"}}}',
+        )
+    )
+
+    google = body["extra_body"]["google"]
+    assert google["cached_content"] == "abc"
+    assert len(google["safety_settings"]) == len(GEMINI_HARM_CATEGORIES)
+
+
+def test_hand_written_json_wins_over_the_shortcut():
+    body = build_extra_body(
+        _gemini_settings(
+            llm_safety_filters="off",
+            llm_extra_body='{"extra_body": {"google": {"safety_settings": []}}}',
+        )
+    )
+
+    assert body["extra_body"]["google"]["safety_settings"] == []
+
+
+def test_merge_extra_body_leaves_its_inputs_alone():
+    base = {"a": {"b": 1}}
+    merged = merge_extra_body(base, {"a": {"c": 2}})
+
+    assert merged == {"a": {"b": 1, "c": 2}}
+    assert base == {"a": {"b": 1}}
+
+
+class ExtraBodyRejectingCompletions(FakeCompletions):
+    """Stands in for a provider that has never heard of our extras."""
+
+    async def create(self, **kwargs) -> ChatCompletion:
+        if "extra_body" in kwargs:
+            self.calls.append(kwargs)
+            raise _bad_request("Unknown name \"safety_settings\" at 'extra_body'.")
+        return await super().create(**kwargs)
+
+
+def _extra_body_rejecting_service() -> tuple[LLMService, FakeClient]:
+    fake = FakeClient(CHAT_RESPONSE)
+    fake.chat.completions = ExtraBodyRejectingCompletions(CHAT_RESPONSE)
+    settings = _gemini_settings(llm_safety_filters="off", reasoning_level="auto")
+    return LLMService(settings, client=fake), fake
+
+
+async def test_a_rejected_extra_body_costs_the_knob_not_the_reply():
+    service, fake = _extra_body_rejecting_service()
+
+    completion = await service.complete(messages=[{"role": "user", "content": "hi"}])
+
+    assert completion.choices[0].message.content == "hello!"
+    assert "extra_body" not in fake.chat.completions.calls[-1]
+
+
+async def test_the_extra_body_rejection_is_remembered():
+    service, fake = _extra_body_rejecting_service()
+
+    await service.complete(messages=[{"role": "user", "content": "one"}])
+    calls_after_first = len(fake.chat.completions.calls)
+    await service.complete(messages=[{"role": "user", "content": "two"}])
+
+    assert len(fake.chat.completions.calls) == calls_after_first + 1
+
+
+async def test_a_reasoning_rejection_leaves_the_extra_body_in_place():
+    """One 400 must not cost both knobs."""
+    fake = FakeClient(CHAT_RESPONSE)
+    fake.chat.completions = RejectingCompletions(
+        CHAT_RESPONSE, "Thinking level is not supported for this model."
+    )
+    service = LLMService(_gemini_settings(llm_safety_filters="off"), client=fake)
+
+    await service.complete(messages=[{"role": "user", "content": "hi"}])
+
+    last = fake.chat.completions.calls[-1]
+    assert "reasoning_effort" not in last
+    assert "extra_body" in last

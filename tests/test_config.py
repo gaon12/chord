@@ -233,3 +233,38 @@ def test_log_level_is_case_insensitive():
 def test_unknown_log_level_is_rejected():
     with pytest.raises(ValidationError):
         _minimal_settings(log_level="chatty")
+
+
+# -- Provider extras ------------------------------------------------------------------
+
+
+def test_safety_filters_default_to_the_providers_own_setting():
+    assert _minimal_settings().llm_safety_filters == "default"
+
+
+def test_safety_filters_accept_sloppy_casing():
+    assert _minimal_settings(llm_safety_filters=" OFF ").llm_safety_filters == "off"
+
+
+def test_unknown_safety_filter_value_is_rejected():
+    with pytest.raises(ValidationError):
+        _minimal_settings(llm_safety_filters="yolo")
+
+
+def test_extra_body_defaults_to_nothing():
+    assert _minimal_settings().extra_body == {}
+
+
+def test_extra_body_is_parsed_from_json():
+    settings = _minimal_settings(llm_extra_body='{"google": {"cached_content": "x"}}')
+    assert settings.extra_body == {"google": {"cached_content": "x"}}
+
+
+def test_malformed_extra_body_fails_at_startup_not_mid_chat():
+    with pytest.raises(ValidationError, match="not valid JSON"):
+        _minimal_settings(llm_extra_body="{nope}")
+
+
+def test_extra_body_must_be_an_object():
+    with pytest.raises(ValidationError, match="JSON object"):
+        _minimal_settings(llm_extra_body="[1, 2]")

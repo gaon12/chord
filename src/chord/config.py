@@ -10,6 +10,7 @@ order (later wins):
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Literal
 
@@ -37,6 +38,11 @@ REASONING_EFFORT_BY_LEVEL: dict[str, str | None] = {
 #: The same levels as an ordered tuple, cheapest thinking first. Used to
 #: build the /reasoning choices so code and command never drift apart.
 REASONING_LEVELS: tuple[str, ...] = tuple(REASONING_EFFORT_BY_LEVEL)
+
+#: How much provider-side content filtering to ask for. "off" only means
+#: anything where the provider actually exposes a threshold (today: the
+#: Gemini API); it never disables the model's own training.
+SafetyFilters = Literal["default", "off"]
 
 #: Standard logging levels, accepted in any casing.
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
@@ -73,6 +79,17 @@ class Settings(BaseSettings):
     #: Providers that reject the parameter are detected at runtime and
     #: fall back transparently (see chord.llm.LLMService).
     reasoning_level: ReasoningLevel = "none"
+
+    #: Provider-side content filtering. Set LLM_SAFETY_FILTERS=off when
+    #: the provider's own filter - not the model - is refusing things it
+    #: shouldn't. Only the Gemini API exposes such a threshold; see
+    #: chord.llm.build_extra_body for what it does elsewhere (nothing).
+    llm_safety_filters: SafetyFilters = "default"
+
+    #: Raw JSON object merged into every chat request's ``extra_body``,
+    #: for provider extras this project has no setting of its own. The
+    #: escape hatch that keeps provider-specific knobs out of the code.
+    llm_extra_body: str = ""
 
     #: Seconds to wait for one LLM response before giving up. The SDK
     #: default (10 minutes) is an eternity in a chat window: a stalled
@@ -168,6 +185,27 @@ class Settings(BaseSettings):
             return value.strip().lower()
         return value
 
+    @field_validator("llm_safety_filters", mode="before")
+    @classmethod
+    def _normalize_safety_filters(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
+    @field_validator("llm_extra_body")
+    @classmethod
+    def _validate_extra_body(cls, value: str) -> str:
+        """Reject malformed JSON at startup, not on the first message."""
+        if not value.strip():
+            return value
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"LLM_EXTRA_BODY is not valid JSON: {exc}") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError('LLM_EXTRA_BODY must be a JSON object, e.g. {"key": 1}')
+        return value
+
     @field_validator("log_level", mode="before")
     @classmethod
     def _normalize_log_level(cls, value: object) -> object:
@@ -175,6 +213,11 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return value.strip().upper()
         return value
+
+    @property
+    def extra_body(self) -> dict:
+        """``LLM_EXTRA_BODY`` parsed; ``{}`` when unset."""
+        return json.loads(self.llm_extra_body) if self.llm_extra_body.strip() else {}
 
     @property
     def reasoning_effort(self) -> str | None:

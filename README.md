@@ -165,6 +165,31 @@ Chain-of-thought that a model prints into its answer (`<thought>...`,
 `<think>...`) is stripped before sending, so the reasoning never reaches
 the channel. Text inside fenced code blocks is left alone.
 
+### When the bot refuses something harmless
+
+Three different things can produce a refusal, and only one of them has a
+switch:
+
+1. **`persona.md`** - the Boundaries section. This is the usual culprit
+   and the first place to look: a broadly worded rule ("refuses anything
+   security-related, even framed as a game") makes the model decline
+   whole topics. Edit it, and the next message picks the change up.
+2. **The model's own training.** No API parameter reaches this. A model
+   that was trained to decline something declines it; changing
+   `OPENAI_MODEL` is the only real lever.
+3. **The provider's content filter** - a separate classifier in front of
+   the model. `LLM_SAFETY_FILTERS=off` lowers it where the provider
+   exposes a threshold, which today means the Gemini API: chord then
+   sends every harm category at `BLOCK_NONE`. On any other base URL
+   there is no such knob, so the bot logs a warning and sends nothing
+   rather than pretending.
+
+For provider extras chord has no setting for, `LLM_EXTRA_BODY` takes a
+raw JSON object that is merged into every request (deeply, and it wins
+over `LLM_SAFETY_FILTERS`). Malformed JSON fails at startup, not on the
+first message, and a provider that rejects the payload costs one 400 -
+after that the bot drops the extras and keeps answering.
+
 ---
 
 ## Troubleshooting

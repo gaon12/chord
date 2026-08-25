@@ -10,8 +10,10 @@ The bot never talks to the `openai` package directly; it goes through
 
 from __future__ import annotations
 
+import copy
 import logging
 from collections.abc import Iterable
+from typing import Any
 
 from openai import AsyncOpenAI, BadRequestError
 from openai.types.chat import ChatCompletion, ChatCompletionToolParam
@@ -35,10 +37,104 @@ _REASONING_REJECTION_MARKERS = (
 )
 
 
+#: Substrings that identify a 400 caused by the provider extras we send
+#: in ``extra_body`` rather than by the conversation itself.
+_EXTRA_BODY_REJECTION_MARKERS = (
+    "extra_body",
+    "extrabody",
+    "safety_settings",
+    "safetysettings",
+    "safety setting",
+)
+
+#: Gemini's harm categories. Every one has to be listed explicitly - a
+#: category left out keeps the provider default, so a partial list reads
+#: as "off" but behaves as "mostly on".
+GEMINI_HARM_CATEGORIES = (
+    "HARM_CATEGORY_HARASSMENT",
+    "HARM_CATEGORY_HATE_SPEECH",
+    "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+    "HARM_CATEGORY_DANGEROUS_CONTENT",
+    "HARM_CATEGORY_CIVIC_INTEGRITY",
+)
+
+
 def is_reasoning_rejection(message: str) -> bool:
     """True when an error message blames the reasoning parameter."""
     lowered = message.lower()
     return any(marker in lowered for marker in _REASONING_REJECTION_MARKERS)
+
+
+def is_extra_body_rejection(message: str) -> bool:
+    """True when an error message blames our provider-extras payload."""
+    lowered = message.lower()
+    return any(marker in lowered for marker in _EXTRA_BODY_REJECTION_MARKERS)
+
+
+def is_google_endpoint(base_url: str) -> bool:
+    """Whether the base URL points at Gemini's OpenAI-compatible API."""
+    return "generativelanguage.googleapis.com" in (base_url or "").lower()
+
+
+def gemini_safety_settings(threshold: str = "BLOCK_NONE") -> dict[str, Any]:
+    """Gemini safety thresholds, wrapped the way the compat layer wants.
+
+    The OpenAI-compatible endpoint tunnels Gemini-only request fields
+    through a nested ``extra_body.google`` object - the outer key really
+    is named ``extra_body`` again, which looks like a typo and is not.
+
+    ``BLOCK_NONE`` turns off *probability-based blocking* by the API's
+    filter. It does not touch what the model itself was trained to
+    decline, which is where most surprising refusals actually come from.
+    """
+    return {
+        "extra_body": {
+            "google": {
+                "safety_settings": [
+                    {"category": category, "threshold": threshold}
+                    for category in GEMINI_HARM_CATEGORIES
+                ]
+            }
+        }
+    }
+
+
+def merge_extra_body(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Deep-merge two extra_body payloads; ``override`` wins on conflict.
+
+    Shallow merging would be a trap here: everything Gemini-specific
+    lives under the same ``extra_body.google`` key, so a hand-written
+    thinking_config would silently drop the safety settings next to it.
+    """
+    merged = copy.deepcopy(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = merge_extra_body(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+
+def build_extra_body(settings: Settings) -> dict[str, Any]:
+    """Provider extras to send with every request, from settings.
+
+    Two sources, merged: the ``LLM_SAFETY_FILTERS`` shortcut and the raw
+    ``LLM_EXTRA_BODY`` escape hatch, with the raw JSON winning so an
+    operator can always override what the shortcut produced.
+    """
+    body: dict[str, Any] = {}
+    if settings.llm_safety_filters == "off":
+        if is_google_endpoint(settings.openai_base_url):
+            body = gemini_safety_settings()
+        else:
+            logger.warning(
+                "LLM_SAFETY_FILTERS=off has no effect on %s - only the Gemini "
+                "API exposes a filter threshold over the OpenAI-compatible "
+                "wire format. Refusals from other providers come from the "
+                "model's own training and from persona.md, not from a knob.",
+                settings.openai_base_url,
+            )
+    return merge_extra_body(body, settings.extra_body)
 
 
 def create_client(settings: Settings) -> AsyncOpenAI:
@@ -70,6 +166,10 @@ class LLMService:
         #: parameter, so an incompatible model costs one 400 per process
         #: instead of one per message.
         self._reasoning_supported = True
+        #: Provider-specific request extras (safety thresholds and the
+        #: LLM_EXTRA_BODY escape hatch), with the same one-400 rule.
+        self._extra_body = build_extra_body(settings)
+        self._extra_body_supported = True
 
     def set_reasoning_effort(self, effort: str | None) -> None:
         """Change the effort at runtime, re-enabling the parameter.
@@ -112,26 +212,50 @@ class LLMService:
             # questions are answered directly without forced tool use.
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
+        if self.reasoning_enabled:
+            kwargs["reasoning_effort"] = self.reasoning_effort
+        if self._extra_body and self._extra_body_supported:
+            kwargs["extra_body"] = self._extra_body
 
-        if not self.reasoning_enabled:
-            return await self._client.chat.completions.create(**kwargs)
+        while True:
+            try:
+                return await self._client.chat.completions.create(**kwargs)
+            except BadRequestError as exc:
+                # Optional knobs are worth one 400 each, never the reply:
+                # drop whichever one the provider named and try again.
+                # Each drop removes a key for good, so this ends.
+                if not self._drop_rejected_option(str(exc), kwargs):
+                    raise
 
-        try:
-            return await self._client.chat.completions.create(
-                reasoning_effort=self.reasoning_effort, **kwargs
-            )
-        except BadRequestError as exc:
-            if not is_reasoning_rejection(str(exc)):
-                raise
-            # Plenty of OpenAI-compatible models simply have no notion of
-            # reasoning effort. Losing the knob is fine; losing the reply
-            # is not - so drop the parameter and answer anyway.
+    def _drop_rejected_option(self, error: str, kwargs: dict) -> bool:
+        """Remove the optional parameter a 400 blamed; False if none did.
+
+        Both knobs are conveniences that plenty of OpenAI-compatible
+        servers have never heard of. Answering without them beats not
+        answering, and remembering the rejection keeps an incompatible
+        provider at one 400 per process instead of one per message.
+        """
+        if "reasoning_effort" in kwargs and is_reasoning_rejection(error):
+            kwargs.pop("reasoning_effort")
             self._reasoning_supported = False
             logger.warning(
                 "Model %s rejected reasoning_effort=%s (%s); "
                 "continuing without it for the rest of this run.",
                 self.model,
                 self.reasoning_effort,
-                exc,
+                error,
             )
-            return await self._client.chat.completions.create(**kwargs)
+            return True
+
+        if "extra_body" in kwargs and is_extra_body_rejection(error):
+            kwargs.pop("extra_body")
+            self._extra_body_supported = False
+            logger.warning(
+                "Provider rejected the extra request body (%s); continuing "
+                "without it. Check LLM_SAFETY_FILTERS / LLM_EXTRA_BODY - "
+                "these fields are provider-specific.",
+                error,
+            )
+            return True
+
+        return False
