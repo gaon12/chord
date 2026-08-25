@@ -11,6 +11,7 @@ from chord.attachments import attach
 from chord.bot import (
     HELP_TEXT,
     ChordBot,
+    build_attachment_context,
     build_reply_context,
     clean_message_text,
     estimate_tool_prompt_tokens,
@@ -96,6 +97,7 @@ class FakeMessage:
         guild=None,
         reference=None,
         role_mentions=(),
+        attachments=(),
     ):
         self.content = content
         self.channel = channel
@@ -104,6 +106,18 @@ class FakeMessage:
         self.role_mentions = list(role_mentions)
         self.guild = guild
         self.reference = reference
+        self.attachments = list(attachments)
+
+
+class FakeAttachment:
+    """Minimal discord.Attachment stand-in."""
+
+    def __init__(
+        self, filename="shot.png", url="https://cdn.test/shot.png", content_type="image/png"
+    ):
+        self.filename = filename
+        self.url = url
+        self.content_type = content_type
 
 
 class _FakeResponse:
@@ -295,6 +309,81 @@ async def test_history_is_passed_to_engine_and_updated():
 
     _, history_on_second = engine.calls[1]
     assert any(m.get("content") == "[user]: one" for m in history_on_second)
+
+
+# -- Uploaded files --------------------------------------------------------------------
+
+
+def test_an_upload_is_named_with_its_url():
+    """Discord delivers uploads out of band; content alone shows nothing."""
+    message = FakeMessage("", FakeChannel(), attachments=[FakeAttachment()])
+
+    context = build_attachment_context(message)
+
+    assert context == "[attached image: shot.png https://cdn.test/shot.png]\n"
+
+
+def test_non_images_are_labelled_as_files():
+    message = FakeMessage(
+        "",
+        FakeChannel(),
+        attachments=[FakeAttachment("notes.txt", "https://cdn.test/n.txt", "text/plain")],
+    )
+
+    assert "[attached file: notes.txt" in build_attachment_context(message)
+
+
+def test_a_message_with_no_uploads_adds_nothing():
+    assert build_attachment_context(FakeMessage("hi", FakeChannel())) == ""
+
+
+def test_a_pile_of_screenshots_is_capped():
+    """Nobody dumping twenty images is asking about all twenty."""
+    message = FakeMessage(
+        "",
+        FakeChannel(),
+        attachments=[FakeAttachment(f"{i}.png", f"https://cdn.test/{i}.png") for i in range(20)],
+    )
+
+    assert len(build_attachment_context(message).splitlines()) == 4
+
+
+def test_an_attachment_without_a_url_is_skipped():
+    broken = FakeAttachment()
+    broken.url = None
+
+    assert build_attachment_context(FakeMessage("", FakeChannel(), attachments=[broken])) == ""
+
+
+async def test_the_prompt_carries_the_upload_so_a_tool_can_reach_it():
+    bot, engine = _bot()
+    channel = FakeChannel()
+
+    await bot.on_message(
+        FakeMessage(
+            "<@999> 이 QR 뭐야?",
+            channel,
+            mentions=[FakeUser(999)],
+            attachments=[FakeAttachment()],
+        )
+    )
+
+    prompt = engine.calls[0][0]
+    assert "https://cdn.test/shot.png" in prompt
+    assert prompt.endswith("[user]: 이 QR 뭐야?")
+
+
+async def test_an_image_with_no_words_is_still_answered():
+    """A bare screenshot used to look like an empty mention."""
+    bot, engine = _bot()
+    channel = FakeChannel()
+
+    await bot.on_message(
+        FakeMessage("<@999>", channel, mentions=[FakeUser(999)], attachments=[FakeAttachment()])
+    )
+
+    assert engine.calls, "the upload should have been enough to answer"
+    assert "https://cdn.test/shot.png" in engine.calls[0][0]
 
 
 # -- Speaker identity ------------------------------------------------------------------

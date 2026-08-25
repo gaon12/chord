@@ -53,9 +53,19 @@ MAX_REDIRECTS = 5
 #: does not hold a chat turn open.
 FETCH_TIMEOUT = 20.0
 
-#: Content types worth handing to a language model. Anything else - a
-#: PDF, an image, a zip - is reported rather than silently mangled.
+#: Content types worth handing to a language model as text. Anything
+#: else - a PDF, a zip - is reported rather than silently mangled.
 TEXTUAL_TYPES = ("text/", "application/json", "application/xml", "+json", "+xml")
+
+#: Content types a decoder can look at. Kept separate from the textual
+#: list because "can a model read this?" and "can Pillow open this?" are
+#: different questions with different right answers.
+IMAGE_TYPES = ("image/",)
+
+#: Images get more room than pages: a phone screenshot of a QR code is
+#: routinely bigger than an article, and it is one file rather than a
+#: whole document tree.
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
 #: Charset declared in the document rather than in the headers. Korean
 #: pages still ship EUC-KR this way, and httpx assumes UTF-8 when the
@@ -64,6 +74,16 @@ _META_CHARSET_RE = re.compile(
     rb"""<meta[^>]+charset\s*=\s*["']?\s*([a-zA-Z0-9_\-]+)""",
     re.IGNORECASE,
 )
+
+
+@dataclass(frozen=True)
+class FetchedBytes:
+    """What came back, before anyone decides what it means."""
+
+    url: str
+    content_type: str
+    body: bytes
+    truncated: bool
 
 
 @dataclass(frozen=True)
@@ -132,8 +152,7 @@ def assert_fetchable(url: str) -> None:
 
 
 def is_textual(content_type: str) -> bool:
-    lowered = content_type.lower()
-    return any(marker in lowered for marker in TEXTUAL_TYPES)
+    return _type_matches(content_type, TEXTUAL_TYPES)
 
 
 def decode_body(body: bytes, content_type: str) -> str:
@@ -159,14 +178,53 @@ def decode_body(body: bytes, content_type: str) -> str:
 
 
 async def fetch_page(url: str) -> FetchedPage:
-    """GET a user-supplied URL, following redirects the careful way.
+    """GET a user-supplied URL and decode it as text.
 
     Raises:
         SkillHTTPError: for anything the model should tell the user
             about - a blocked address, a dead link, a PDF, a timeout.
     """
+    fetched = await fetch_bytes(
+        url,
+        accept=TEXTUAL_TYPES,
+        accept_header="text/html,application/xhtml+xml,text/plain;q=0.9",
+        rejection="which I cannot read as text",
+    )
+    return FetchedPage(
+        url=fetched.url,
+        content_type=fetched.content_type,
+        text=decode_body(fetched.body, fetched.content_type),
+        truncated=fetched.truncated,
+    )
+
+
+async def fetch_image(url: str) -> FetchedBytes:
+    """GET a user-supplied URL that is expected to be an image."""
+    return await fetch_bytes(
+        url,
+        accept=IMAGE_TYPES,
+        accept_header="image/*",
+        rejection="which is not an image",
+        max_bytes=MAX_IMAGE_BYTES,
+    )
+
+
+async def fetch_bytes(
+    url: str,
+    *,
+    accept: tuple[str, ...],
+    accept_header: str,
+    rejection: str,
+    max_bytes: int = MAX_RESPONSE_BYTES,
+) -> FetchedBytes:
+    """GET a user-supplied URL, following redirects the careful way.
+
+    The address rules live here and nowhere else, so every caller that
+    fetches something a chat user named - a page, an image - gets the
+    same guard whether it remembers to ask for it or not.
+    """
     current = normalize_url(url)
-    headers = {**DEFAULT_HEADERS, "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9"}
+    headers = {**DEFAULT_HEADERS, "Accept": accept_header}
 
     async with httpx.AsyncClient(
         timeout=FETCH_TIMEOUT,
@@ -184,25 +242,29 @@ async def fetch_page(url: str) -> FetchedPage:
                         raise SkillHTTPError(f"{current} answered HTTP {response.status_code}.")
 
                     content_type = response.headers.get("content-type", "")
-                    if not is_textual(content_type):
+                    if not _type_matches(content_type, accept):
                         raise SkillHTTPError(
-                            f"{current} is {content_type or 'an unknown type'}, "
-                            "which I cannot read as text."
+                            f"{current} is {content_type or 'an unknown type'}, {rejection}."
                         )
 
-                    body, truncated = await _read_capped(response)
+                    body, truncated = await _read_capped(response, max_bytes)
             except httpx.RequestError as exc:
                 logger.warning("Could not fetch %s: %s", current, exc)
                 raise SkillHTTPError(f"Could not reach {current}.") from exc
 
-            return FetchedPage(
+            return FetchedBytes(
                 url=current,
                 content_type=content_type,
-                text=decode_body(body, content_type),
+                body=body,
                 truncated=truncated,
             )
 
     raise SkillHTTPError(f"{url} redirected more than {MAX_REDIRECTS} times; giving up.")
+
+
+def _type_matches(content_type: str, accept: tuple[str, ...]) -> bool:
+    lowered = content_type.lower()
+    return any(marker in lowered for marker in accept)
 
 
 def _next_hop(current: str, response: httpx.Response) -> str:
@@ -212,13 +274,13 @@ def _next_hop(current: str, response: httpx.Response) -> str:
     return str(httpx.URL(current).join(location))
 
 
-async def _read_capped(response: httpx.Response) -> tuple[bytes, bool]:
-    """Read a response body, stopping at :data:`MAX_RESPONSE_BYTES`."""
+async def _read_capped(response: httpx.Response, max_bytes: int) -> tuple[bytes, bool]:
+    """Read a response body, stopping at ``max_bytes``."""
     chunks: list[bytes] = []
     size = 0
     async for chunk in response.aiter_bytes():
         chunks.append(chunk)
         size += len(chunk)
-        if size >= MAX_RESPONSE_BYTES:
-            return b"".join(chunks)[:MAX_RESPONSE_BYTES], True
+        if size >= max_bytes:
+            return b"".join(chunks)[:max_bytes], True
     return b"".join(chunks), False

@@ -182,6 +182,32 @@ def build_reply_context(message: discord.Message) -> str:
     return f'[replying to {display_name}: "{text}"]\n'
 
 
+#: Files listed per message. Someone dumping twenty screenshots is not
+#: asking about all twenty, and each line costs prompt.
+MAX_LISTED_ATTACHMENTS = 4
+
+
+def build_attachment_context(message: discord.Message) -> str:
+    """List what was uploaded, so the model knows it can reach it.
+
+    Discord delivers uploads out of band: ``message.content`` for a
+    posted screenshot is an empty string, so a model reading only the
+    text has no idea an image exists, let alone where. Naming them puts
+    the URL where a tool can be pointed at it - read_qr for a code,
+    read_url for a text file - and turns "이거 읽어줘" from an impossible
+    request into a fetchable one.
+    """
+    lines = []
+    for item in (getattr(message, "attachments", None) or [])[:MAX_LISTED_ATTACHMENTS]:
+        url = getattr(item, "url", None)
+        if not url:
+            continue
+        kind = "image" if (getattr(item, "content_type", "") or "").startswith("image/") else "file"
+        name = " ".join(str(getattr(item, "filename", "") or "file").split())[:80]
+        lines.append(f"[attached {kind}: {name} {url}]")
+    return "\n".join(lines) + "\n" if lines else ""
+
+
 #: Tag names open models use to think out loud inside the answer body.
 _REASONING_TAG = r"thought|thinking|think|reasoning|reflection"
 
@@ -582,8 +608,9 @@ class ChordBot(discord.Client):
 
         user_text = clean_message_text(message.content)
         reply_context = build_reply_context(message)
+        attachment_context = build_attachment_context(message)
 
-        if not user_text.strip() and not reply_context.strip():
+        if not user_text.strip() and not reply_context.strip() and not attachment_context:
             # Bot was mentioned but content is empty - almost certainly
             # means Message Content Intent is not enabled in the portal.
             if message.guild is not None:
@@ -601,9 +628,13 @@ class ChordBot(discord.Client):
                 await self._send(message.channel, HELP_TEXT)
             return
 
-        # Build the full prompt: reply context first, then the message
-        # itself tagged with who sent it.
-        prompt_text = f"{reply_context}{label_speaker(speaker_name(message.author), user_text)}"
+        # Build the full prompt: context first - what was replied to and
+        # what was uploaded - then the message itself, tagged with who
+        # sent it.
+        prompt_text = (
+            f"{reply_context}{attachment_context}"
+            f"{label_speaker(speaker_name(message.author), user_text)}"
+        )
 
         channel_id = message.channel.id
         self._engine.system_prompt = self._system_prompt()

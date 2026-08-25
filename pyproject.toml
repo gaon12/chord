@@ -31,6 +31,12 @@ dependencies = [
     # font path is what keeps Korean labels from turning into boxes.
     # 10.1 is the floor because load_default() only takes a size there.
     "pillow>=10.1",
+    # QR generation for the make_qr skill (draws through Pillow).
+    "qrcode>=8.0",
+    # QR/barcode decoding for read_qr. Prebuilt wheels on every platform
+    # this runs on: pyzbar would need a system libzbar, and opencv would
+    # need 60 MB, to answer the same question.
+    "zxing-cpp>=2.2",
     # IANA timezone database for Windows (zoneinfo falls back to it).
     "tzdata>=2024.1",
     # Non-deprecated audioop replacement (discord.py imports it for voice;

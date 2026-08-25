@@ -35,6 +35,7 @@ tools when a question needs real-world data.
 | Wikipedia | `get_wiki_summary` | Korean Wikipedia API | - (key-less) |
 | News headlines | `get_news` | 연합뉴스 RSS · Google News RSS | - (key-less) |
 | Random utilities | `random_pick` | dice / coin / number / pick / shuffle | - |
+| QR codes | `make_qr`, `read_qr` | qrcode + zxing-cpp (local) | - |
 | Reminders | `set_reminder`, `list_reminders` | pure Python (SQLite) | - |
 
 Everything works **without any API keys** except the URL shortener; optional
@@ -175,6 +176,28 @@ rather than showing a level that does nothing.
 Chain-of-thought that a model prints into its answer (`<thought>...`,
 `<think>...`) is stripped before sending, so the reasoning never reaches
 the channel. Text inside fenced code blocks is left alone.
+
+### QR codes
+
+`make_qr` renders text or a link as a PNG and posts it to the channel.
+`read_qr` goes the other way: point it at an image URL and it returns
+what the code says — QR and the common 1D barcodes, since the decoder
+reads those anyway.
+
+Images posted in a channel arrive out of band, so `message.content` for
+a bare screenshot is an empty string. The bot now names uploads in the
+prompt as `[attached image: shot.png https://cdn.discordapp.com/...]`,
+which is what makes "이 QR 뭐라고 써있어?" answerable — and it means a
+posted image alone, with no text, is enough to get a reply.
+
+Decoding is local: `zxing-cpp` ships prebuilt wheels everywhere this
+runs, where `pyzbar` would need a system libzbar and OpenCV would need
+60 MB to answer the same question. A code too small to resolve is
+retried once at double size, which rescues most phone screenshots.
+
+A decoded link is reported, never opened — QR phishing is the reason to
+say where a code points rather than following it. The image URL itself
+goes through the same address guard as `read_url`.
 
 ### Searching, then actually reading
 
