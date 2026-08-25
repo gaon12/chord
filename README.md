@@ -119,6 +119,16 @@ very next message (no restart needed).
 Conversations are kept per channel **in memory only** - restarting the bot
 clears them, and nothing is persisted.
 
+**Who said what**: a channel is a group chat, but chat APIs deliver every
+participant under the same anonymous `user` role - so an unlabelled bot
+reads a whole room as one person. chord tags each message with its
+sender's display name (`[Alice]: 서울 날씨 어때?`) before handing it to the
+model, and the label stays in the stored history, so the bot can answer
+the person who just spoke and still remember what someone else said
+earlier. Nicknames are trimmed to 32 characters and any brackets in them
+are folded to parentheses; the label is a hint for the model, not proof
+of identity.
+
 ### Reasoning level
 
 How much the model deliberates before replying is a setting, not a fixed

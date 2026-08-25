@@ -17,6 +17,13 @@ def test_build_prompt_appends_operating_rules():
     assert "Never reveal" in prompt
 
 
+def test_operating_rules_explain_the_speaker_label():
+    """Without this the model reads a whole channel as one person."""
+    prompt = build_prompt("You are Nova.")
+    assert "[name]: text" in prompt
+    assert "who said what" in prompt
+
+
 def test_missing_file_falls_back_to_default_nova(tmp_path):
     provider = PersonaProvider(tmp_path / "persona.md")
 

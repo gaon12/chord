@@ -12,6 +12,8 @@ from chord.bot import (
     clean_message_text,
     estimate_tool_prompt_tokens,
     format_reply,
+    label_speaker,
+    speaker_name,
     split_message,
     warn_if_tool_catalog_is_large,
 )
@@ -76,6 +78,7 @@ class FakeMessage:
         *,
         author_bot: bool = False,
         author_name="user",
+        author_display=None,
         mentions=(),
         guild=None,
         reference=None,
@@ -83,7 +86,7 @@ class FakeMessage:
     ):
         self.content = content
         self.channel = channel
-        self.author = FakeAuthor(name=author_name, is_bot=author_bot)
+        self.author = FakeAuthor(name=author_name, is_bot=author_bot, display_name=author_display)
         self.mentions = list(mentions)
         self.role_mentions = list(role_mentions)
         self.guild = guild
@@ -207,7 +210,7 @@ async def test_replies_when_mentioned_in_guild():
 
     await bot.on_message(msg)
 
-    assert engine.calls[0][0] == "hello"
+    assert engine.calls[0][0] == "[user]: hello"
     assert channel.sent == ["answer!"]
 
 
@@ -225,7 +228,7 @@ async def test_answers_direct_messages_without_mention():
 
     await bot.on_message(FakeMessage("dm text", channel))  # no guild -> DM
 
-    assert engine.calls[0][0] == "dm text"
+    assert engine.calls[0][0] == "[user]: dm text"
 
 
 async def test_ignores_other_bots():
@@ -270,7 +273,95 @@ async def test_history_is_passed_to_engine_and_updated():
     await bot.on_message(FakeMessage("<@999> two", channel, mentions=[FakeUser(999)]))
 
     _, history_on_second = engine.calls[1]
-    assert any(m.get("content") == "one" for m in history_on_second)
+    assert any(m.get("content") == "[user]: one" for m in history_on_second)
+
+
+# -- Speaker identity ------------------------------------------------------------------
+
+
+def test_speaker_name_prefers_the_server_nickname():
+    assert speaker_name(FakeAuthor(name="account", display_name="Nickname")) == "Nickname"
+
+
+def test_speaker_name_falls_back_to_the_account_name():
+    author = FakeAuthor(name="account")
+    del author.display_name
+    assert speaker_name(author) == "account"
+
+
+def test_speaker_name_folds_brackets_so_labels_cannot_be_forged():
+    assert speaker_name(FakeAuthor(display_name="[admin]")) == "(admin)"
+
+
+def test_speaker_name_collapses_whitespace_and_newlines():
+    assert speaker_name(FakeAuthor(display_name="a\n b  c")) == "a b c"
+
+
+def test_speaker_name_is_truncated_to_discords_own_limit():
+    assert len(speaker_name(FakeAuthor(display_name="n" * 80))) == 32
+
+
+def test_speaker_name_survives_an_author_with_no_name_at_all():
+    assert speaker_name(object()) == "unknown"
+
+
+def test_label_speaker_tags_the_message():
+    assert label_speaker("Alice", "hi") == "[Alice]: hi"
+
+
+async def test_each_author_reaches_the_engine_under_their_own_name():
+    """Two people in one channel must not read as one person."""
+    bot, engine = _bot()
+    channel = FakeChannel()
+
+    await bot.on_message(
+        FakeMessage(
+            "<@999> 내 이름 기억해",
+            channel,
+            mentions=[FakeUser(999)],
+            guild="g",
+            author_display="Alice",
+        )
+    )
+    await bot.on_message(
+        FakeMessage(
+            "<@999> 나는?",
+            channel,
+            mentions=[FakeUser(999)],
+            guild="g",
+            author_display="Bob",
+        )
+    )
+
+    assert engine.calls[0][0] == "[Alice]: 내 이름 기억해"
+    assert engine.calls[1][0] == "[Bob]: 나는?"
+    # ...and the earlier speaker is still named in the stored history.
+    assert any(m.get("content") == "[Alice]: 내 이름 기억해" for m in engine.calls[1][1])
+
+
+async def test_reply_context_stays_in_front_of_the_speaker_label():
+    bot, engine = _bot()
+    channel = FakeChannel()
+
+    quoted_author = FakeUser()
+    quoted_author.display_name = "Carol"
+    resolved = type("ResolvedMsg", (), {"content": "원본 메시지", "author": quoted_author})()
+    reference = type("Ref", (), {"resolved": resolved})()
+
+    await bot.on_message(
+        FakeMessage(
+            "<@999> 이거 무슨 뜻이야?",
+            channel,
+            mentions=[FakeUser(999)],
+            guild="g",
+            reference=reference,
+            author_display="Dave",
+        )
+    )
+
+    prompt = engine.calls[0][0]
+    assert prompt.startswith("[replying to Carol:")
+    assert prompt.endswith("[Dave]: 이거 무슨 뜻이야?")
 
 
 # -- Reply-to-bot messages -----------------------------------------------------------
@@ -403,7 +494,7 @@ async def test_role_mention_reaches_the_engine():
         FakeMessage("<@&555> 안녕?", channel, guild=guild, role_mentions=[FakeRole(555)])
     )
 
-    assert engine.calls[0][0] == "안녕?"
+    assert engine.calls[0][0] == "[user]: 안녕?"
     assert channel.sent == ["answer!"]
 
 

@@ -127,6 +127,41 @@ def _merge_chunks(segments: list[str], limit: int) -> list[str]:
     return [c for c in chunks if c]
 
 
+#: Discord caps display names at 32 characters; reusing that cap keeps a
+#: joke nickname from crowding out the actual question.
+MAX_SPEAKER_NAME = 32
+
+
+def speaker_name(author: Any) -> str:
+    """Readable name for whoever sent a message.
+
+    Prefers the per-server nickname (``display_name``) because that is
+    the name the other people in the channel actually see; falls back to
+    the account name, then to a placeholder.
+    """
+    raw = getattr(author, "display_name", None) or getattr(author, "name", None)
+    cleaned = " ".join(str(raw or "").replace("[", "(").replace("]", ")").split())
+    return cleaned[:MAX_SPEAKER_NAME] or "unknown"
+
+
+def label_speaker(name: str, text: str) -> str:
+    """Tag a message with its author so the model can tell people apart.
+
+    A channel is a group chat, but every participant's words arrive as
+    the same anonymous ``user`` role - so without a label the model
+    reads a whole room as one person and answers accordingly ("you said
+    earlier..." to someone who never said it). The OpenAI ``name`` field
+    would be the tidier home for this, but plenty of compatible
+    providers drop or reject it, so the label rides inside the content
+    where nothing can strip it.
+
+    It is a hint, not authentication: anyone can type the same shape
+    into a message. Brackets inside nicknames are folded to parentheses
+    so a forged label at least cannot look identical to a real one.
+    """
+    return f"[{name}]: {text}"
+
+
 def build_reply_context(message: discord.Message) -> str:
     """Extract replied-to message content for LLM context."""
     ref = getattr(message, "reference", None)
@@ -560,11 +595,9 @@ class ChordBot(discord.Client):
                 await self._send(message.channel, HELP_TEXT)
             return
 
-        # Build the full prompt including reply context.
-        prompt_text = f"{reply_context}{user_text}" if reply_context else user_text
-        if not prompt_text.strip():
-            await self._send(message.channel, HELP_TEXT)
-            return
+        # Build the full prompt: reply context first, then the message
+        # itself tagged with who sent it.
+        prompt_text = f"{reply_context}{label_speaker(speaker_name(message.author), user_text)}"
 
         channel_id = message.channel.id
         self._engine.system_prompt = self._persona.get()
