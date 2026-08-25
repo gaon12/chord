@@ -22,6 +22,26 @@ from chord.skills.base import Skill
 
 logger = logging.getLogger(__name__)
 
+#: Rough JSON-schema characters per token. Calibrated against a
+#: provider's own ``usage.prompt_tokens`` on this project: growing the
+#: catalog by 11 086 schema characters cost 2 866 tokens, and by 25 250
+#: characters cost 8 947 - i.e. 2.8-3.9 chars/token. Only ever used to
+#: show or warn about a cost, never for accounting.
+SCHEMA_CHARS_PER_TOKEN = 3.5
+
+
+def estimate_tool_prompt_tokens(tools: list[dict]) -> int:
+    """Approximate what a set of tool schemas adds to every request.
+
+    Every tool definition is re-sent with every message, and a
+    tool-calling turn sends them several times over, so this is the
+    number that decides whether a channel fits inside a per-minute
+    input-token limit.
+    """
+    if not tools:
+        return 0
+    return int(len(json.dumps(tools, ensure_ascii=False)) / SCHEMA_CHARS_PER_TOKEN)
+
 
 class SkillRegistry:
     """Simple name -> skill mapping with safe execution."""

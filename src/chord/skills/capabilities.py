@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 from chord.skills.base import Skill
-from chord.skills.registry import SkillRegistry
+from chord.skills.registry import SkillRegistry, estimate_tool_prompt_tokens
 
 #: Group heading for everything that ships with chord.
 BUILT_IN = "Built-in"
@@ -56,15 +56,42 @@ def group_tools(registry: SkillRegistry) -> dict[str, list[tuple[str, str]]]:
     return dict(sorted(groups.items(), key=lambda item: (item[0] != BUILT_IN, item[0])))
 
 
-def render_capabilities(registry: SkillRegistry, *, with_summaries: bool = True) -> str:
-    """Human-readable listing of everything registered."""
+def group_costs(registry: SkillRegistry) -> dict[str, int]:
+    """Estimated prompt tokens each group adds to every message."""
+    costs: dict[str, list[dict]] = {}
+    for skill in registry.skills():
+        server = getattr(skill, "server", None)
+        group = f"MCP · {server}" if server else BUILT_IN
+        costs.setdefault(group, []).append(dict(skill.to_openai_tool()))
+    return {group: estimate_tool_prompt_tokens(tools) for group, tools in costs.items()}
+
+
+def render_capabilities(
+    registry: SkillRegistry,
+    *,
+    with_summaries: bool = True,
+    with_cost: bool = False,
+) -> str:
+    """Human-readable listing of everything registered.
+
+    ``with_cost`` prints what each group adds to the prompt of every
+    single message. That is the number worth seeing before deciding
+    whether an MCP server is earning its place, and it is invisible
+    everywhere else.
+    """
     groups = group_tools(registry)
     if not groups:
         return "No tools are registered at all - something went wrong at startup."
 
-    lines = [f"{len(registry)} tool(s) available."]
+    costs = group_costs(registry) if with_cost else {}
+    header = f"{len(registry)} tool(s) available."
+    if with_cost:
+        header = f"{len(registry)} tool(s), ~{sum(costs.values()):,} prompt tokens per message."
+
+    lines = [header]
     for group, entries in groups.items():
-        lines.append(f"\n{group} ({len(entries)}):")
+        cost = f", ~{costs[group]:,} tokens" if with_cost else ""
+        lines.append(f"\n{group} ({len(entries)}{cost}):")
         for name, summary in entries:
             lines.append(f"- {name}: {summary}" if (summary and with_summaries) else f"- {name}")
     return "\n".join(lines)

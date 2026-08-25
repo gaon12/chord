@@ -75,12 +75,11 @@ class Series:
 class PriceHistorySkill(Skill):
     name = "get_price_history"
     description = (
-        "Show how a price moved over time and post a chart image of it: "
-        "exchange rates, stocks or crypto. Use this for any question "
-        "about a trend, a period or a history, or when a graph or chart "
-        "is asked for (추이, 흐름, 변동, 그래프, 차트, 최근 한 달, 지난주). "
-        "For a single current value use get_exchange_rate, "
-        "get_stock_price or get_crypto_price instead."
+        "Chart how a price moved over time and post the image: exchange "
+        "rates, stocks, crypto. Use for any trend, period or history "
+        "question, or when a graph is asked for (추이, 흐름, 변동, 그래프, "
+        "차트, 최근 한 달). For one current value use get_exchange_rate / "
+        "get_stock_price / get_crypto_price."
     )
     parameters: ClassVar[dict] = {
         "type": "object",
@@ -93,10 +92,9 @@ class PriceHistorySkill(Skill):
             "symbol": {
                 "type": "string",
                 "description": (
-                    "What to chart. exchange: a currency pair like "
-                    "'USD/KRW' (a bare 'USD' means USD/KRW). stock: a "
-                    "ticker like 'AAPL' or '005930.KS' for KOSPI. "
-                    "crypto: a coin symbol like 'BTC' (Upbit KRW market)."
+                    "exchange: a pair like 'USD/KRW' (bare 'USD' means "
+                    "USD/KRW). stock: 'AAPL', or '005930.KS' for KOSPI. "
+                    "crypto: 'BTC' (Upbit KRW market)."
                 ),
             },
             "days": {

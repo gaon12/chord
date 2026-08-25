@@ -10,6 +10,7 @@ from chord.skills.base import Skill
 from chord.skills.capabilities import (
     BUILT_IN,
     CapabilitiesSkill,
+    group_costs,
     group_tools,
     render_capabilities,
 )
@@ -143,3 +144,40 @@ def test_the_skill_is_discovered_and_gets_its_registry():
     )
 
     assert "list_capabilities" in registry
+
+
+# -- What the catalogue costs ---------------------------------------------------------
+
+
+def test_cost_is_reported_per_group():
+    """Every schema is re-sent with every message; that is the number."""
+    registry = _registry(
+        _Tool("get_weather", "Weather."),
+        _Tool("sqlite_query", "Query.", server="sqlite"),
+    )
+
+    costs = group_costs(registry)
+
+    assert set(costs) == {BUILT_IN, "MCP · sqlite"}
+    assert all(value > 0 for value in costs.values())
+
+
+def test_the_listing_can_show_what_each_group_adds_to_a_prompt():
+    registry = _registry(
+        _Tool("get_weather", "Weather."),
+        _Tool("law_search", "Search.", server="korean-law"),
+    )
+
+    text = render_capabilities(registry, with_summaries=False, with_cost=True)
+
+    assert "prompt tokens per message" in text
+    assert "tokens):" in text
+    # An MCP server's price sits next to its name, which is where the
+    # decision to keep or drop it actually gets made.
+    assert "MCP · korean-law (1, ~" in text
+
+
+def test_cost_is_off_by_default_because_the_model_does_not_need_it():
+    text = render_capabilities(_registry(_Tool("get_weather", "Weather.")))
+
+    assert "tokens" not in text

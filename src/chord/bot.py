@@ -14,7 +14,6 @@ All conversation logic lives in :mod:`chord.engine`.
 from __future__ import annotations
 
 import io
-import json
 import logging
 import re
 from typing import Any
@@ -38,7 +37,7 @@ from chord.skills import create_default_registry
 from chord.skills._http import close_shared_client
 from chord.skills._quota import get_quota_store, render_usage
 from chord.skills.capabilities import render_capabilities
-from chord.skills.registry import SkillRegistry
+from chord.skills.registry import SkillRegistry, estimate_tool_prompt_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -322,13 +321,6 @@ REASONING_LEVEL_HELP: dict[str, str] = {
 }
 
 
-#: Rough JSON-schema characters per token. Calibrated against the
-#: provider's own ``usage.prompt_tokens`` on this project: growing the
-#: catalog by 11 086 schema characters cost 2 866 tokens, and by 25 250
-#: characters cost 8 947 - i.e. 2.8-3.9 chars/token. Only ever used to
-#: decide whether to print a warning, never for accounting.
-_SCHEMA_CHARS_PER_TOKEN = 3.5
-
 #: Estimated prompt tokens of tool schemas above which the catalog is
 #: worth complaining about. Every tool definition is re-sent with every
 #: request, so this is charged per message and counts against the
@@ -336,13 +328,6 @@ _SCHEMA_CHARS_PER_TOKEN = 3.5
 #: input tokens per minute; past ~8 000 a single tool-calling turn (two
 #: requests) already exceeds it and the provider starts answering 429.
 LARGE_TOOL_PROMPT_TOKENS = 8000
-
-
-def estimate_tool_prompt_tokens(tools: list[dict]) -> int:
-    """Approximate what the tool catalog adds to every single request."""
-    if not tools:
-        return 0
-    return int(len(json.dumps(tools, ensure_ascii=False)) / _SCHEMA_CHARS_PER_TOKEN)
 
 
 def warn_if_tool_catalog_is_large(tools: list[dict]) -> None:
@@ -414,7 +399,7 @@ class ChordBot(discord.Client):
             # Names only: with MCP servers loaded the descriptions run
             # well past Discord's 2000-character ceiling, and this
             # command is read to find out what exists.
-            listing = render_capabilities(self._registry, with_summaries=False)
+            listing = render_capabilities(self._registry, with_summaries=False, with_cost=True)
             await interaction.response.send_message(split_message(listing)[0], ephemeral=True)
 
         @self.tree.command(name="usage", description="Show remaining API quotas per provider")

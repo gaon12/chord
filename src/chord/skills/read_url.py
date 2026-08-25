@@ -45,12 +45,10 @@ def _clamp_chars(max_chars: int | None) -> int:
 class ReadUrlSkill(Skill):
     name = "read_url"
     description = (
-        "Open a web page at a URL and return its readable text, so you "
-        "can summarize it, quote it, or answer questions about it. Use "
-        "this whenever someone pastes a link and asks what it says "
-        "(요약해줘, 무슨 내용이야, 정리해줘) - you have no other way to see "
-        "a page. Works on articles and plain text; not on PDFs, images, "
-        "or pages that need JavaScript to render."
+        "Open a web page and return its readable text, to summarize or "
+        "quote. Use whenever someone pastes a link and asks what it says "
+        "(요약해줘, 무슨 내용이야, 정리해줘) - there is no other way to see a "
+        "page. Not PDFs, images, or JavaScript-rendered pages."
     )
     parameters: ClassVar[dict] = {
         "type": "object",
@@ -62,9 +60,8 @@ class ReadUrlSkill(Skill):
             "max_chars": {
                 "type": "integer",
                 "description": (
-                    f"How much text to return (default {DEFAULT_MAX_CHARS}, "
-                    f"max {MAX_CHARS_LIMIT}). Raise it only when the "
-                    "default was cut short of what you need."
+                    f"Characters to return (default {DEFAULT_MAX_CHARS}, max "
+                    f"{MAX_CHARS_LIMIT}). Raise only if the text was cut short."
                 ),
             },
         },

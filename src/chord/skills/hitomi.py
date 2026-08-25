@@ -479,12 +479,10 @@ def _clamp_limit(limit: object) -> int:
 class HitomiSearchSkill(Skill):
     name = "search_hitomi"
     description = (
-        "Search hitomi.la for doujinshi/manga and return metadata: "
-        "title, artist, tags and the gallery link. Free-text by default "
-        "(words from the title or tags), or an exact tag/artist/series/"
-        "character/group/type index, or a gallery number. Adult content "
-        "- it only answers in age-restricted channels and DMs. Returns "
-        "links, never images."
+        "Search hitomi.la for doujinshi/manga: title, artist, tags and "
+        "the gallery link. Free text by default, or an exact index, or a "
+        "gallery number. Adult content - answers only in age-restricted "
+        "channels and DMs. Returns links, never images."
     )
     parameters: ClassVar[dict] = {
         "type": "object",
@@ -492,28 +490,23 @@ class HitomiSearchSkill(Skill):
             "query": {
                 "type": "string",
                 "description": (
-                    "What to look for. With area='search' (the default) "
-                    "these are words from the title or tags, and every "
-                    "word must match. With an index area it is the "
-                    "exact name hitomi uses ('touhou project'). With "
-                    "area='id' it is the gallery number. Leave empty "
-                    "for the newest uploads."
+                    "area='search': words from the title or tags, all of "
+                    "which must match. An index area: the exact name "
+                    "hitomi uses ('touhou project'). area='id': the "
+                    "gallery number. Empty: the newest uploads."
                 ),
             },
             "area": {
                 "type": "string",
                 "enum": list(AREAS),
                 "description": (
-                    "'search' (default) matches words anywhere; 'id' "
-                    "takes a gallery number; the rest are exact index "
-                    "lookups by that field."
+                    "'search' (default) matches words; 'id' takes a "
+                    "gallery number; the rest are exact index lookups."
                 ),
             },
             "language": {
                 "type": "string",
-                "description": (
-                    "korean (default), japanese, english, chinese, or 'all' for every language."
-                ),
+                "description": "korean (default), japanese, english, chinese, all.",
             },
             "limit": {
                 "type": "integer",

@@ -291,11 +291,10 @@ class WebSearchSkill(Skill):
     name = "web_search"
     description = (
         "Search the web for current information (news, facts, docs, "
-        "anything you are unsure about). Returns titles, links and "
-        "short snippets. Snippets are previews, not sources: when the "
-        "answer needs anything a two-line preview cannot carry - how, "
-        "why, details, numbers, quotes - set read_pages to open the top "
-        "results and read them, instead of guessing from the snippet."
+        "anything you are unsure about). Returns titles, links and short "
+        "snippets. Snippets are previews, not sources: if the answer is "
+        "not literally in them, set read_pages to open the top results "
+        "and read them rather than guessing."
     )
     parameters: ClassVar[dict] = {
         "type": "object",
@@ -303,20 +302,18 @@ class WebSearchSkill(Skill):
             "query": {
                 "type": "string",
                 "description": (
-                    "What to search for. Describe the page you want in "
-                    "a phrase rather than typing bare keywords - the "
-                    "fallback engine matches on meaning, and it costs "
-                    "the other engine nothing."
+                    "What to search for. Describe the page you want as a "
+                    "phrase, not bare keywords - the fallback engine "
+                    "matches on meaning."
                 ),
             },
             "read_pages": {
                 "type": "integer",
                 "description": (
-                    "How many of the top results to actually open and "
-                    f"read (0-{MAX_READ_PAGES}, default 0). Use 1-2 "
-                    "whenever the snippets are unlikely to contain the "
-                    "answer; it is slower but it is the difference "
-                    "between finding a page and knowing what it says."
+                    f"How many top results to open and read (0-{MAX_READ_PAGES}, "
+                    "default 0). Use 1-2 when the snippets will not carry "
+                    "the answer; slower, but it is the difference between "
+                    "finding a page and knowing what it says."
                 ),
             },
         },
