@@ -50,6 +50,13 @@ BORDER = 4
 #: double size costs milliseconds and rescues small or blurry captures.
 UPSCALE = 2
 
+#: Pixels an image may hold before it is refused. A QR code photographed
+#: on a phone is under 15 megapixels; a 50000x50000 PNG that compresses
+#: to a few hundred kilobytes is a decompression bomb, and the size cap
+#: on the download cannot see it because the bomb is small on the wire.
+#: Checked from the header, before any pixels are allocated.
+MAX_IMAGE_PIXELS = 40_000_000
+
 
 def make_qr_png(text: str) -> bytes:
     """Render ``text`` as a QR code PNG.
@@ -72,7 +79,17 @@ def decode_barcodes(data: bytes) -> list[tuple[str, str]]:
     """``(format, text)`` for every barcode in an image."""
     try:
         image = Image.open(io.BytesIO(data))
+        # open() reads the header only, so the dimensions are known
+        # before anything is decoded - which is the whole point.
+        width, height = image.size
+        if width * height > MAX_IMAGE_PIXELS:
+            raise SkillHTTPError(
+                f"That image is {width}x{height}, far larger than any QR code "
+                "needs; refusing to decode it."
+            )
         image.load()
+    except SkillHTTPError:
+        raise
     except Exception as exc:  # noqa: BLE001 - any unreadable image lands here
         raise SkillHTTPError(f"That does not open as an image ({exc}).") from exc
 
