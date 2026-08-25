@@ -29,6 +29,7 @@ import logging
 import os
 import re
 import sys
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -56,6 +57,35 @@ logger = logging.getLogger(__name__)
 
 #: MCP tool names may collide across servers; prefix keeps them unique.
 _INVALID_NAME_CHARS = re.compile(r"[^a-zA-Z0-9_-]")
+
+
+def select_tools(tools: list, include: list[str] | None, exclude: list[str] | None) -> list:
+    """Filter a server's tools by ``include``/``exclude`` glob patterns.
+
+    A server that exposes forty tools charges for forty tools on every
+    single message, whether or not this channel ever asks about cinema
+    showtimes. Patterns are matched against the server's own tool names
+    (``daiso_*``, not the prefixed ``daiso_daiso_*``), because that is
+    what its documentation lists.
+
+    ``include`` is an allowlist applied first; ``exclude`` removes from
+    whatever is left. Neither given means "everything", which is what
+    every existing config expects.
+    """
+    chosen = list(tools)
+    if include:
+        chosen = [
+            tool
+            for tool in chosen
+            if any(fnmatch(getattr(tool, "name", ""), pattern) for pattern in include)
+        ]
+    if exclude:
+        chosen = [
+            tool
+            for tool in chosen
+            if not any(fnmatch(getattr(tool, "name", ""), pattern) for pattern in exclude)
+        ]
+    return chosen
 
 
 def sanitize_tool_name(server_name: str, tool_name: str) -> str:
@@ -162,6 +192,11 @@ def load_server_specs(
     env: dict[str, str] | None = None,
 ) -> dict[str, dict]:
     """Read and validate the mcp.json file; missing file means no servers.
+
+    Beyond the transport keys, a server entry may carry ``tools`` (an
+    allowlist of glob patterns) and ``excludeTools`` (a denylist), which
+    decide which of its tools are registered at all - see
+    :func:`select_tools`.
 
     String values may reference environment variables with
     ``${VAR_NAME}`` (e.g. an API key kept out of the config file).
@@ -287,17 +322,23 @@ class McpManager:
                 continue
 
             session = record["session"]
-            for tool in record["tools"]:
+            offered = record["tools"]
+            chosen = select_tools(offered, spec.get("tools"), spec.get("excludeTools"))
+            for tool in chosen:
                 adapter = McpTool(server_name, session, tool)
                 register(adapter)
                 self._tool_names.append(adapter.name)
                 registered += 1
             self._servers.append(record)
-            logger.info(
-                "MCP server %s connected with %d tool(s).",
-                server_name,
-                len(record["tools"]),
-            )
+            if len(chosen) == len(offered):
+                logger.info("MCP server %s connected with %d tool(s).", server_name, len(chosen))
+            else:
+                logger.info(
+                    "MCP server %s connected with %d of %d tool(s) (filtered).",
+                    server_name,
+                    len(chosen),
+                    len(offered),
+                )
         return registered
 
     async def _launch(self, server_name: str, spec: dict) -> dict:

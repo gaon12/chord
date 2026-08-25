@@ -45,6 +45,9 @@ Everything works **without any API keys** except the URL shortener; optional
 keys unlock the official/premium providers listed above.
 
 External **MCP** servers add more tools on top - see [MCP tools](#mcp-tools).
+The shipped `mcp.json` wires up Keenable (search), Korean law, a SQLite
+bridge, and [daiso-mcp](https://github.com/hmmhmmhm/daiso-mcp) for Daiso
+product and store-inventory lookups.
 
 ---
 
@@ -502,6 +505,27 @@ JSON catalog routinely fails to notice what is in it. If it still guesses:
   calling - it should say *when* to use the tool, not just what it does.
 * A model too small to tool-call reliably will not be argued into it;
   `OPENAI_MODEL` is the lever that actually moves.
+
+**An MCP server offers more tools than you want to pay for.** Every tool
+schema is re-sent with every message, so a forty-tool server is a
+forty-tool bill on questions that have nothing to do with it. A server
+entry takes `tools` (an allowlist of glob patterns) and `excludeTools`
+(a denylist), matched against the server's own tool names:
+
+```json
+"daiso": {
+  "url": "https://mcp.aka.page",
+  "tools": ["daiso_*"]
+}
+```
+
+That server offers 40 tools for ~8,800 prompt tokens per message; the
+six `daiso_*` ones cost ~1,100. Other prefixes it exposes, with what
+each adds: `seveneleven_*` ~820, `emart24_*` ~810, `oliveyoung_*` ~810,
+`megabox_*` ~730, `lottecinema_*` ~690, `opinet_*` ~670, `gs25_*` ~640,
+`cgv_*` ~630, `lottemart_*` ~510, `cu_*` ~470, `places_search` ~280,
+`compare_prices` ~140. Neither key given means every tool, as before.
+`/tools` shows what each server actually costs once connected.
 
 **An MCP server is missing from the tool list.** A server that fails to
 start is skipped with a warning so it cannot take the bot down - check

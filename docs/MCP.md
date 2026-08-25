@@ -105,3 +105,31 @@ resolved before spawning.
 * A background loop re-reads `mcp.json` every **30 minutes**; edits are
   applied automatically (old tools unregistered, new ones registered).
   Disable everything with `MCP_ENABLED=false`.
+
+
+## Picking tools out of a server
+
+Every tool schema is re-sent with every message, so a server that offers
+forty tools costs forty tools' worth of prompt on every question - most
+of which have nothing to do with it. A server entry can name which of
+its tools to register:
+
+```json
+"daiso": {
+  "url": "https://mcp.aka.page",
+  "tools": ["daiso_*"],
+  "excludeTools": ["*_feedback"]
+}
+```
+
+* `tools` is an allowlist of glob patterns, applied first.
+* `excludeTools` is a denylist, applied to whatever survives.
+* Patterns match the server's **own** tool names (`daiso_search_products`),
+  not the `server_tool` names chord registers them under - config is
+  written against what a server's own documentation lists.
+* Neither key means every tool, which is what every config written
+  before this feature expects.
+
+The startup log says when a filter is in effect ("connected with 6 of 40
+tool(s) (filtered)"), and `/tools` shows what each server costs per
+message once it is connected.
