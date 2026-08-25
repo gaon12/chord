@@ -469,6 +469,17 @@ Mentioning the bot's *role* instead of the bot user works too - that is
 what Discord's autocomplete usually inserts. `@everyone` and `@here` are
 deliberately ignored.
 
+**The bot says it hit a usage limit on the very first message.** That is
+a *token*-per-minute quota, not a request-per-minute one: the whole tool
+catalog is re-sent with every message, so one message can exceed it on
+its own. Check `/tools` for the per-message cost, and trim there - an
+MCP server you rarely use is the cheapest thing to cut.
+
+chord waits the limit out once before giving up (honouring the
+provider's own `retryDelay` when it sends one, up to 45s), because the
+OpenAI SDK's built-in retries start under a second - right for a
+per-second limit, useless against a sixty-second window.
+
 **Replies take 20-30 seconds, or the bot says it hit a usage limit.**
 Almost always the input-token rate limit, not a slow model. Every tool
 definition is re-sent with **every** request, and a turn that calls tools
