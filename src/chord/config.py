@@ -79,6 +79,18 @@ class Settings(BaseSettings):
     #: provider just looks like a bot that ignores you.
     llm_timeout_seconds: float = Field(default=120.0, gt=0)
 
+    #: Estimated prompt tokens of stored channel history above which the
+    #: oldest turns are folded into a summary (see chord.compaction).
+    #: Set well below the model's real context window: it is the *next*
+    #: turn - history plus tool catalog plus the answer - that has to
+    #: fit. 0 disables compaction and leaves only the message-count cap.
+    history_token_budget: int = Field(default=6000, ge=0)
+
+    #: Hard cap on messages remembered per channel. The backstop for
+    #: histories compaction cannot help with (one enormous turn), and
+    #: what bounds memory when compaction is off.
+    history_max_messages: int = Field(default=40, gt=0)
+
     #: System prompt prepended to every conversation.
     system_prompt: str = (
         "You are chord, a friendly and concise Discord bot. "

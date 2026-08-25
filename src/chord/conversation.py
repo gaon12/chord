@@ -59,6 +59,32 @@ class ConversationStore:
         if excess > 0:
             del channel_history[: next_turn_start(channel_history, excess)]
 
+    def replace_prefix(
+        self,
+        channel_id: int,
+        head: list[dict],
+        replacement: list[dict],
+    ) -> bool:
+        """Swap the oldest messages of a channel for shorter ones.
+
+        This is how compaction lands its summary. It runs after the
+        answer has already been sent, so another message in the same
+        channel may have been appended - or trimmed away - while the
+        summary was being written. Comparing by identity makes that
+        harmless: the swap applies only when the exact messages that
+        were summarized are still at the front.
+
+        Returns:
+            True when the history was actually rewritten.
+        """
+        channel_history = self._channels.get(channel_id)
+        if channel_history is None or len(channel_history) < len(head):
+            return False
+        if any(old is not seen for old, seen in zip(channel_history, head, strict=False)):
+            return False
+        channel_history[: len(head)] = replacement
+        return True
+
     def reset(self, channel_id: int) -> None:
         """Forget everything said in one channel."""
         self._channels.pop(channel_id, None)

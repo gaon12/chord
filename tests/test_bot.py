@@ -17,7 +17,9 @@ from chord.bot import (
     split_message,
     warn_if_tool_catalog_is_large,
 )
+from chord.compaction import SUMMARY_PREFIX, HistoryCompactor
 from chord.config import REASONING_LEVELS, Settings
+from fakes import FakeLLM
 
 # -- Stub classes -------------------------------------------------------------------
 
@@ -100,11 +102,12 @@ class FakeUser:
         self.id = user_id
 
 
-def _bot() -> tuple[ChordBot, StubEngine]:
+def _bot(**overrides) -> tuple[ChordBot, StubEngine]:
     settings = Settings(
         _env_file=None,
         discord_token="t",
         openai_api_key="k",
+        **overrides,
     )
     engine = StubEngine()
     bot = ChordBot(settings=settings, engine=engine)
@@ -394,6 +397,53 @@ async def test_reply_to_bot_message_triggers_response():
     assert len(engine.calls) == 1
     assert "explain this" in engine.calls[0][0]
     assert "Here's the weather data" in engine.calls[0][0]  # reply context
+
+
+# -- History compaction ----------------------------------------------------------------
+
+
+async def test_long_channel_history_is_compacted_after_the_reply():
+    """The digest is paid for after answering, not before."""
+    bot, engine = _bot()
+    channel = FakeChannel()
+    bot._compactor = HistoryCompactor(FakeLLM("- 앨리스가 날씨를 물어봄"), token_budget=1)
+
+    await bot.on_message(FakeMessage("<@999> one", channel, mentions=[FakeUser(999)]))
+    await bot.on_message(FakeMessage("<@999> two", channel, mentions=[FakeUser(999)]))
+    await bot.on_message(FakeMessage("<@999> three", channel, mentions=[FakeUser(999)]))
+
+    history = engine.calls[-1][1]
+    assert history[0]["content"].startswith(SUMMARY_PREFIX)
+    assert "앨리스가 날씨를 물어봄" in history[0]["content"]
+    # The oldest turn now lives in the digest instead of verbatim.
+    assert not any(m.get("content") == "[user]: one" for m in history)
+    # ...and every answer still went out.
+    assert channel.sent == ["answer!", "answer!", "answer!"]
+
+
+async def test_compaction_is_off_when_the_budget_is_zero():
+    bot, engine = _bot(history_token_budget=0)
+    channel = FakeChannel()
+
+    for text in ("one", "two", "three"):
+        await bot.on_message(FakeMessage(f"<@999> {text}", channel, mentions=[FakeUser(999)]))
+
+    assert any(m.get("content") == "[user]: one" for m in engine.calls[-1][1])
+
+
+async def test_a_failing_summarizer_never_costs_the_user_their_answer():
+    bot, _ = _bot()
+    channel = FakeChannel()
+
+    class BoomCompactor:
+        async def compact(self, history):
+            raise RuntimeError("summarizer down")
+
+    bot._compactor = BoomCompactor()
+
+    await bot.on_message(FakeMessage("<@999> hi", channel, mentions=[FakeUser(999)]))
+
+    assert channel.sent == ["answer!"]
 
 
 # -- Persona integration --------------------------------------------------------------

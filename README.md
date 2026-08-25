@@ -119,6 +119,15 @@ very next message (no restart needed).
 Conversations are kept per channel **in memory only** - restarting the bot
 clears them, and nothing is persisted.
 
+**Staying inside the context window**: once a channel's stored history is
+estimated to cost more than `HISTORY_TOKEN_BUDGET` tokens (6000 by
+default), the oldest whole turns are replaced by a short digest the model
+writes of them - so the bot still knows what was decided ten turns ago
+without re-sending all of it. The digest is written *after* the answer
+goes out, so it never makes a reply slower, and `HISTORY_MAX_MESSAGES`
+(40) stays as a hard backstop. Set `HISTORY_TOKEN_BUDGET=0` to turn
+compaction off.
+
 **Who said what**: a channel is a group chat, but chat APIs deliver every
 participant under the same anonymous `user` role - so an unlabelled bot
 reads a whole room as one person. chord tags each message with its

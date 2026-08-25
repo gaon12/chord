@@ -103,3 +103,51 @@ def test_next_turn_start_finds_the_boundary():
     assert next_turn_start(history, 1) == 4
     assert next_turn_start(history, 4) == 4
     assert next_turn_start(history, 5) == 0  # no boundary left -> keep all
+
+
+# -- Compaction hand-off ----------------------------------------------------------
+
+
+def test_replace_prefix_swaps_the_oldest_messages():
+    store = ConversationStore()
+    first, second = _msg("user", "old"), _msg("user", "new")
+    store.append(1, first, second)
+
+    applied = store.replace_prefix(1, [first], [_msg("user", "summary")])
+
+    assert applied is True
+    assert store.history(1) == [{"role": "user", "content": "summary"}, second]
+
+
+def test_replace_prefix_declines_when_the_channel_moved_on():
+    """Compaction runs after the reply, so the history can change under it."""
+    store = ConversationStore()
+    first = _msg("user", "old")
+    store.append(1, first)
+    summarized = [first]
+    store.reset(1)  # e.g. someone ran /reset while the digest was written
+    store.append(1, _msg("user", "fresh start"))
+
+    applied = store.replace_prefix(1, summarized, [_msg("user", "summary")])
+
+    assert applied is False
+    assert store.history(1) == [{"role": "user", "content": "fresh start"}]
+
+
+def test_replace_prefix_on_an_unknown_channel_is_a_no_op():
+    store = ConversationStore()
+    assert store.replace_prefix(42, [_msg("user", "x")], []) is False
+
+
+def test_replace_prefix_keeps_messages_appended_meanwhile():
+    store = ConversationStore()
+    first = _msg("user", "old")
+    store.append(1, first)
+    store.append(1, _msg("user", "arrived during the summary"))
+
+    store.replace_prefix(1, [first], [_msg("user", "summary")])
+
+    assert [m["content"] for m in store.history(1)] == [
+        "summary",
+        "arrived during the summary",
+    ]

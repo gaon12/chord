@@ -23,6 +23,7 @@ from discord import app_commands
 from discord.ext import tasks
 from openai import APITimeoutError, BadRequestError, RateLimitError
 
+from chord.compaction import HistoryCompactor
 from chord.config import REASONING_EFFORT_BY_LEVEL, REASONING_LEVELS, Settings
 from chord.context import reset_current_channel, set_current_channel
 from chord.conversation import ConversationStore
@@ -331,7 +332,10 @@ class ChordBot(discord.Client):
         self._engine = engine
         self._persona = PersonaProvider(settings.persona_path)
         self._reminders = ReminderStore(settings.reminder_db_path)
-        self._store = ConversationStore()
+        self._store = ConversationStore(settings.history_max_messages)
+        self._compactor = HistoryCompactor(
+            getattr(engine, "llm", None), settings.history_token_budget
+        )
         self._registry = registry or SkillRegistry()
         self._mcp = McpManager()
         # Mirrors the LLM service so /reasoning can report a level name
@@ -661,8 +665,40 @@ class ChordBot(discord.Client):
         for chunk in split_message(answer):
             if not await self._send(message.channel, chunk):
                 break
+        await self._compact_history(channel_id)
 
     # -- Internals ---------------------------------------------------------------
+
+    async def _compact_history(self, channel_id: int) -> None:
+        """Summarize old turns once a channel outgrows its token budget.
+
+        Deliberately runs *after* the answer has gone out: the digest
+        costs an extra LLM round-trip, and paying for it on the critical
+        path would make one unlucky message visibly slower for no gain.
+        The budget sits below the real context window precisely so the
+        turn that has to fit is the next one, not this one.
+
+        Failure here is never worth an error message to the channel -
+        the history simply stays long and the message-count cap takes
+        over.
+        """
+        try:
+            result = await self._compactor.compact(self._store.history(channel_id))
+        except Exception:  # noqa: BLE001 - housekeeping must not break chat
+            logger.exception("History compaction failed in channel %s", channel_id)
+            return
+        if result is None:
+            return
+
+        consumed, replacement = result
+        if self._store.replace_prefix(channel_id, consumed, replacement):
+            logger.info(
+                "Compacted %d message(s) into a summary in channel %s",
+                len(consumed),
+                channel_id,
+            )
+        else:
+            logger.debug("Channel %s moved on mid-summary; dropping the digest", channel_id)
 
     async def _send(self, channel: Any, content: str) -> bool:
         """Send one message, turning Discord refusals into clear logs.
