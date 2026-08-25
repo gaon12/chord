@@ -159,6 +159,16 @@ class Settings(BaseSettings):
     #: Kakao REST API key for Korean maps/places/navigation.
     kakao_rest_api_key: str = ""
 
+    #: 국립중앙도서관 open API key, for the book search skill. Issued at
+    #: https://www.nl.go.kr/NL/contents/N31101030700.do - the only one
+    #: of the three catalogues that knows Korean editions properly.
+    nl_api_key: str = ""
+
+    #: Google Books API key. Optional: the API works without one until
+    #: the anonymous daily quota - which is per IP and shared - runs
+    #: out, at which point it answers 429 to everyone behind that IP.
+    google_books_api_key: str = ""
+
     #: Keenable live-web-search MCP API key (used via mcp.json header).
     keenable_api_key: str = ""
 

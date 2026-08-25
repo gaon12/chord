@@ -36,6 +36,7 @@ tools when a question needs real-world data.
 | News headlines | `get_news` | 연합뉴스 RSS · Google News RSS | - (key-less) |
 | Random utilities | `random_pick` | dice / coin / number / pick / shuffle | - |
 | Self-description | `list_capabilities` | the live tool registry | - |
+| Book search | `search_books` | 국립중앙도서관 → Google Books → Open Library | Open Library (key-less) |
 | Doujinshi search | `search_hitomi` | hitomi.la index (metadata only, NSFW channels/DMs) | - |
 | QR codes | `make_qr`, `read_qr` | qrcode + zxing-cpp (local) | - |
 | Reminders | `set_reminder`, `list_reminders` | pure Python (SQLite) | - |
@@ -179,6 +180,26 @@ rather than showing a level that does nothing.
 Chain-of-thought that a model prints into its answer (`<thought>...`,
 `<think>...`) is stripped before sending, so the reasoning never reaches
 the channel. Text inside fenced code blocks is left alone.
+
+### Book search
+
+`search_books` takes a title, an author, keywords or an ISBN and returns
+title, author, publisher, year, ISBN and a link. An ISBN is detected
+(hyphens and spaces are fine) and looked up as an ISBN rather than as
+thirteen digits of free text, which every catalogue handles better.
+
+Three catalogues, tried in order:
+
+1. **국립중앙도서관** — needs `NL_API_KEY`. The only one that reliably knows
+   a Korean edition's publisher and year, so it goes first.
+2. **Google Books** — broad and multilingual. Key-less until the
+   anonymous daily quota runs out, and that quota is per IP and shared,
+   so in practice it 429s often; `GOOGLE_BOOKS_API_KEY` fixes that.
+3. **Open Library** — no key, no quota, thinnest metadata for Korean
+   titles. The one that is always up.
+
+A missing key or an exhausted quota costs a fallback, not the answer,
+and the reply says which catalogue produced it.
 
 ### "What can you do?"
 
