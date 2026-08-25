@@ -27,7 +27,8 @@ from chord.skills._fetch import (
     normalize_url,
 )
 from chord.skills._http import SkillHTTPError
-from chord.skills.read_url import DEFAULT_MAX_CHARS, ReadUrlSkill, extract_readable
+from chord.skills._readable import extract_readable
+from chord.skills.read_url import DEFAULT_MAX_CHARS, ReadUrlSkill
 
 PAGE_URL = "https://example.com/article"
 
