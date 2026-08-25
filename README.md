@@ -30,6 +30,7 @@ tools when a question needs real-world data.
 | Translate | `translate_text` | your configured LLM | - |
 | ELI5 explainer | `explain_eli5` | your configured LLM (audience-calibrated) | - |
 | Crypto prices | `get_crypto_price` | Upbit public ticker | - (key-less) |
+| Price history charts | `get_price_history` | Frankfurter · Yahoo Finance · Upbit candles | - (key-less) |
 | Wikipedia | `get_wiki_summary` | Korean Wikipedia API | - (key-less) |
 | News headlines | `get_news` | 연합뉴스 RSS · Google News RSS | - (key-less) |
 | Random utilities | `random_pick` | dice / coin / number / pick / shuffle | - |
@@ -111,6 +112,11 @@ python -m chord        # or just `chord`, both start the bot
 * `/persona` - view or reload the character definition.
 * `/reasoning` - view or change how hard the bot thinks before answering.
 
+**Charts**: ask for a trend and the answer comes back with a picture —
+*"달러 환율 최근 3개월 추이 보여줘"*, *"테슬라 한 달 차트"*, *"비트코인 2주 흐름"*.
+The bot renders a PNG and attaches it to the reply; see
+[Price history charts](#price-history-charts).
+
 **Reminders**: ask naturally — *"30분 후 라면 끓어라고 알려줘"* or *"8월 25일 오후 2시에 회의"*
 — and the bot posts the message back into the same channel at the right time.
 The character is defined in `persona.md`; edit it and changes apply on the
@@ -164,6 +170,41 @@ rather than showing a level that does nothing.
 Chain-of-thought that a model prints into its answer (`<thought>...`,
 `<think>...`) is stripped before sending, so the reasoning never reaches
 the channel. Text inside fenced code blocks is left alone.
+
+### Price history charts
+
+Discord draws no charts of its own and does not preview SVG, so
+`get_price_history` renders a PNG and attaches it to the reply. One tool
+covers three markets — `exchange` (Frankfurter/ECB), `stock` (Yahoo
+Finance) and `crypto` (Upbit KRW candles) — because they are the same
+question about different markets, and every tool schema is re-sent with
+every request.
+
+The numbers go to the model as text (latest, first, low, high, change);
+only the image is attached. The model is told it cannot see the picture,
+so it points you at it instead of inventing a shape for it.
+
+**Korean labels.** Chart text is drawn with a font found on the host:
+`malgun.ttf` on Windows, AppleSDGothicNeo on macOS, Noto Sans CJK or
+NanumGothic on Linux. If none is found the bot logs a warning and draws
+the labels in ASCII only — Korean is dropped rather than rendered as
+tofu boxes, so `USD/KRW · 달러/원 환율` becomes `USD/KRW`. Axis numbers are
+always ASCII (`120M`, not `1.2억`) so they survive that fallback. To fix
+it properly, install a Korean font:
+
+```bash
+sudo apt install fonts-nanum      # Debian/Ubuntu
+```
+
+or point `CHART_FONT_PATH` at any `.ttf`/`.otf`/`.ttc` that covers
+Hangul. A path that does not exist logs a warning and falls back to the
+search rather than failing silently.
+
+Rendering uses Pillow, not matplotlib: one polyline does not justify
+numpy, and an explicit font path is exactly what makes the 글자 깨짐
+question answerable. If the upload is rejected (too large, missing
+"Attach Files" permission), the bot re-sends the text alone rather than
+losing the answer with the image.
 
 ### When the bot refuses something harmless
 
