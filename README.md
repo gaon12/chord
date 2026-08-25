@@ -243,6 +243,20 @@ warns at startup when its catalog is big enough to matter, and
 are also capped by `LLM_TIMEOUT_SECONDS`, after which the bot says so
 instead of staying silent.
 
+**The bot answers from memory instead of calling a tool** (a made-up
+temperature, a stale price, "리마인더 등록했어" with nothing stored). The
+system prompt carries an explicit routing policy - *would the true answer
+be different today than last month? then call the tool* - plus a one-line
+index of every registered tool, because a small model reading a 25-entry
+JSON catalog routinely fails to notice what is in it. If it still guesses:
+
+* `REASONING_LEVEL=none` sends `reasoning_effort: minimal`, and choosing
+  a tool is exactly the kind of decision that suffers. Try `light`.
+* Check the tool's `description`. It is the main quality lever for tool
+  calling - it should say *when* to use the tool, not just what it does.
+* A model too small to tool-call reliably will not be argued into it;
+  `OPENAI_MODEL` is the lever that actually moves.
+
 **An MCP server is missing from the tool list.** A server that fails to
 start is skipped with a warning so it cannot take the bot down - check
 the startup log for `MCP server <name> failed to start`.

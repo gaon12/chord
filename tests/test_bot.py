@@ -19,6 +19,7 @@ from chord.bot import (
 )
 from chord.compaction import SUMMARY_PREFIX, HistoryCompactor
 from chord.config import REASONING_LEVELS, Settings
+from chord.skills.registry import SkillRegistry
 from fakes import FakeLLM
 
 # -- Stub classes -------------------------------------------------------------------
@@ -397,6 +398,32 @@ async def test_reply_to_bot_message_triggers_response():
     assert len(engine.calls) == 1
     assert "explain this" in engine.calls[0][0]
     assert "Here's the weather data" in engine.calls[0][0]  # reply context
+
+
+# -- Tool index in the system prompt ---------------------------------------------------
+
+
+async def test_the_system_prompt_lists_the_registered_tools():
+    """A 25-entry JSON catalog is easy for a small model to overlook."""
+    from chord.skills.base import Skill
+
+    class WeatherSkill(Skill):
+        name = "get_weather"
+        description = "Current weather for a city."
+        parameters = {"type": "object", "properties": {}}
+
+        async def run(self, **kwargs):
+            return "sunny"
+
+    registry = SkillRegistry()
+    registry.register(WeatherSkill())
+    bot, engine = _bot()
+    bot._registry = registry
+    channel = FakeChannel()
+
+    await bot.on_message(FakeMessage("<@999> hi", channel, mentions=[FakeUser(999)]))
+
+    assert "- get_weather: Current weather for a city" in engine.system_prompt_value
 
 
 # -- History compaction ----------------------------------------------------------------

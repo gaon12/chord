@@ -30,7 +30,7 @@ from chord.conversation import ConversationStore
 from chord.engine import ChatEngine
 from chord.llm import LLMService
 from chord.mcp_client import McpManager
-from chord.persona import PersonaProvider
+from chord.persona import PersonaProvider, with_tool_index
 from chord.reminders import ReminderStore
 from chord.skills import create_default_registry
 from chord.skills._quota import get_quota_store, render_usage
@@ -604,7 +604,7 @@ class ChordBot(discord.Client):
         prompt_text = f"{reply_context}{label_speaker(speaker_name(message.author), user_text)}"
 
         channel_id = message.channel.id
-        self._engine.system_prompt = self._persona.get()
+        self._engine.system_prompt = self._system_prompt()
         token = set_current_channel(channel_id)
 
         async with message.channel.typing():
@@ -668,6 +668,14 @@ class ChordBot(discord.Client):
         await self._compact_history(channel_id)
 
     # -- Internals ---------------------------------------------------------------
+
+    def _system_prompt(self) -> str:
+        """Persona, rules, and a menu of the tools that exist right now.
+
+        Built per message rather than cached: persona.md hot-reloads, and
+        the MCP catalog changes under a running bot.
+        """
+        return with_tool_index(self._persona.get(), self._registry.to_openai_tools())
 
     async def _compact_history(self, channel_id: int) -> None:
         """Summarize old turns once a channel outgrows its token budget.
