@@ -35,6 +35,7 @@ tools when a question needs real-world data.
 | Wikipedia | `get_wiki_summary` | Korean Wikipedia API | - (key-less) |
 | News headlines | `get_news` | 연합뉴스 RSS · Google News RSS | - (key-less) |
 | Random utilities | `random_pick` | dice / coin / number / pick / shuffle | - |
+| Self-description | `list_capabilities` | the live tool registry | - |
 | QR codes | `make_qr`, `read_qr` | qrcode + zxing-cpp (local) | - |
 | Reminders | `set_reminder`, `list_reminders` | pure Python (SQLite) | - |
 
@@ -108,6 +109,7 @@ python -m chord        # or just `chord`, both start the bot
   The LLM decides which skills to call; you can also ask naturally:
   *"5 km를 마일로 바꿔줘"*, *"지금 뉴욕 시간 몇 시야?"*, *"KE801 항공편 어디까지 왔어?"*
 * `/help` - show usage.
+* `/tools` - list every tool currently registered, built-in and MCP.
 * `/usage` - show remaining API quotas per provider.
 * `/reminders` - list pending reminders in this channel.
 * `/reset` - clear this channel's conversation memory.
@@ -176,6 +178,18 @@ rather than showing a level that does nothing.
 Chain-of-thought that a model prints into its answer (`<thought>...`,
 `<think>...`) is stripped before sending, so the reasoning never reaches
 the channel. Text inside fenced code blocks is left alone.
+
+### "What can you do?"
+
+Asked that, a model answers from its idea of itself: it forgets the MCP
+tools that were added this morning and offers abilities it does not
+have. `list_capabilities` reads the live registry instead, so the answer
+is whatever is actually registered right now, grouped with MCP tools
+under the server that provided them.
+
+`/tools` prints the same listing as names only — which is also the
+fastest way to see what an MCP server really exposed, without turning on
+DEBUG logging.
 
 ### QR codes
 

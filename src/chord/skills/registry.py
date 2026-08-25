@@ -53,6 +53,10 @@ class SkillRegistry:
         """Registered skill names, sorted for stable ordering."""
         return sorted(self._skills)
 
+    def skills(self) -> list[Skill]:
+        """Every registered skill, for callers that need more than names."""
+        return list(self._skills.values())
+
     # -- OpenAI tool plumbing -------------------------------------------------
 
     def to_openai_tools(self) -> list[ChatCompletionToolParam]:

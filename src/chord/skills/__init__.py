@@ -90,8 +90,8 @@ def create_default_registry(settings: Settings) -> SkillRegistry:
     * public modules only (no leading underscore)
     * classes must subclass :class:`chord.skills.base.Skill` and end in
       ``Skill``
-    * ``settings`` / ``llm`` constructor parameters are injected
-      automatically (one shared LLMService instance)
+    * ``settings`` / ``llm`` / ``registry`` constructor parameters are
+      injected automatically (one shared LLMService instance)
 
     A module that will not import, or a skill that will not construct,
     is logged and skipped. Losing one tool is a degraded bot; refusing
@@ -99,7 +99,9 @@ def create_default_registry(settings: Settings) -> SkillRegistry:
     """
     registry = SkillRegistry()
     llm = LLMService(settings)
-    services = {"settings": settings, "llm": llm}
+    # A skill may ask for the registry it lives in - list_capabilities
+    # does, so that its answer includes MCP tools registered later.
+    services = {"settings": settings, "llm": llm, "registry": registry}
 
     for origin, skill_class in _iter_skill_classes():
         try:

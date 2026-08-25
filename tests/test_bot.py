@@ -876,6 +876,12 @@ def test_no_warning_when_reasoning_is_deliberately_off():
     assert "no effect" not in bot._describe_reasoning()
 
 
+def test_tools_are_advertised_in_help():
+    """ "뭐 할 수 있어?" has two answers now: ask, or run the command."""
+    assert "/tools" in HELP_TEXT
+    assert "what I can do" in HELP_TEXT
+
+
 def test_reasoning_is_advertised_in_help():
     assert "/reasoning" in HELP_TEXT
 

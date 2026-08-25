@@ -36,6 +36,7 @@ from chord.persona import PersonaProvider, with_tool_index
 from chord.reminders import ReminderStore
 from chord.skills import create_default_registry
 from chord.skills._quota import get_quota_store, render_usage
+from chord.skills.capabilities import render_capabilities
 from chord.skills.registry import SkillRegistry
 
 logger = logging.getLogger(__name__)
@@ -283,6 +284,7 @@ HELP_TEXT = (
     "**chord** — chat with me by mentioning me (`@chord 서울 날씨 어때?`) "
     "or reply to any message.\n"
     "`/help` — show this message\n"
+    "`/tools` — list every tool I have (or just ask me what I can do)\n"
     "`/usage` — show remaining API quotas\n"
     "`/reminders` — list pending reminders\n"
     "`/reset` — forget this channel's conversation\n"
@@ -387,6 +389,14 @@ class ChordBot(discord.Client):
         @self.tree.command(name="help", description="Show what chord can do")
         async def help_cmd(interaction: discord.Interaction) -> None:
             await interaction.response.send_message(HELP_TEXT, ephemeral=True)
+
+        @self.tree.command(name="tools", description="List every tool I can use right now")
+        async def tools_cmd(interaction: discord.Interaction) -> None:
+            # Names only: with MCP servers loaded the descriptions run
+            # well past Discord's 2000-character ceiling, and this
+            # command is read to find out what exists.
+            listing = render_capabilities(self._registry, with_summaries=False)
+            await interaction.response.send_message(split_message(listing)[0], ephemeral=True)
 
         @self.tree.command(name="usage", description="Show remaining API quotas per provider")
         async def usage_cmd(interaction: discord.Interaction) -> None:
