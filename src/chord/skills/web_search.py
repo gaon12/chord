@@ -10,9 +10,11 @@ answering from an advertisement for the answer. So the skill can also
 open the top results and read them - ``read_pages`` - which is the
 difference between "I found a page about it" and knowing what it says.
 
-The engine lives behind a tiny provider registry (PROVIDERS) so extra
-backends can be plugged in by adding one async function and one dict
-entry - no changes to the skill class itself.
+Engines live behind a small registry (PROVIDERS) and are tried in
+order: DuckDuckGo first because it costs nothing, Keenable second
+because it costs credits but answers when DuckDuckGo has decided we
+look like a robot - which it does, regularly, and there is no polite
+way to argue with a CAPTCHA.
 """
 
 from __future__ import annotations
@@ -24,6 +26,9 @@ import re
 from typing import ClassVar
 from urllib.parse import parse_qs, unquote, urlsplit
 
+import httpx
+
+from chord.config import Settings
 from chord.skills._fetch import fetch_page
 from chord.skills._http import SkillHTTPError, get_text
 from chord.skills._readable import extract_readable
@@ -49,6 +54,22 @@ BROWSER_HEADERS = {
 #: being blocked instead of as "nothing matched your search".
 _CHALLENGE_MARKERS = ("bots use duckduckgo", "confirm this search was made by a human")
 
+#: Keenable's MCP endpoint. Spoken to as plain JSON-RPC over HTTP
+#: rather than through the MCP client: the server answers tools/call
+#: without a session, and one POST does not need a protocol handshake,
+#: a background task and a connection to keep alive.
+KEENABLE_MCP_URL = "https://api.keenable.ai/mcp"
+
+#: Keenable's search tool, and how long to wait for it. It searches a
+#: live index rather than a cache, so it is slower than a scrape.
+KEENABLE_TOOL = "search_web_pages"
+KEENABLE_TIMEOUT = 45.0
+
+#: Keenable returns paragraphs of context per result, not a two-line
+#: preview. Kept long enough to be worth the credits and short enough
+#: not to bury the answer.
+KEENABLE_SNIPPET_CHARS = 600
+
 #: Number of results returned to the model.
 MAX_RESULTS = 5
 
@@ -63,6 +84,7 @@ MAX_READ_PAGES = 3
 MAX_PAGE_CHARS = 1200
 
 _LINK_RE = re.compile(r'<a[^>]+href="(?P<href>[^"]+)"[^>]*>(?P<title>.*?)</a>', re.S)
+_KEENABLE_FIELD_RE = re.compile(r"^(Title|URL):\s*(.+)$", re.MULTILINE)
 _SNIPPET_RE = re.compile(r'class="result-snippet"[^>]*>(.*?)</td>', re.S)
 _TAG_RE = re.compile(r"<[^>]+>")
 
@@ -101,7 +123,7 @@ def parse_results(raw_html: str, limit: int = MAX_RESULTS) -> list[dict]:
     return results
 
 
-async def search_duckduckgo(query: str) -> list[dict]:
+async def search_duckduckgo(query: str, _settings: Settings | None = None) -> list[dict]:
     """Default engine: key-less DuckDuckGo lite."""
     raw_html = await get_text(
         DUCKDUCKGO_LITE_URL,
@@ -122,11 +144,86 @@ def is_challenge_page(raw_html: str) -> bool:
     return any(marker in lowered for marker in _CHALLENGE_MARKERS)
 
 
+def parse_keenable_results(text: str, limit: int = MAX_RESULTS) -> list[dict]:
+    """Parse Keenable's text blocks into the shape DuckDuckGo produces.
+
+    The tool answers with ``Title:`` / ``URL:`` / ``Snippets:`` blocks
+    rather than JSON, so the split is on the next ``Title:`` at the
+    start of a line.
+    """
+    results: list[dict] = []
+    for block in re.split(r"\n(?=Title:\s)", text.strip()):
+        fields = dict(_KEENABLE_FIELD_RE.findall(block))
+        url = (fields.get("URL") or "").strip()
+        if not url.startswith("http"):
+            continue
+        snippet = ""
+        if "Snippets:" in block:
+            snippet = " ".join(block.split("Snippets:", 1)[1].split())
+        results.append(
+            {
+                "title": (fields.get("Title") or url).strip(),
+                "url": url,
+                "snippet": snippet[:KEENABLE_SNIPPET_CHARS],
+            }
+        )
+        if len(results) >= limit:
+            break
+    return results
+
+
+async def search_keenable(query: str, settings: Settings) -> list[dict]:
+    """Fallback engine: Keenable's live web index, over its MCP endpoint."""
+    api_key = (settings.keenable_api_key or "").strip()
+    if not api_key:
+        raise SkillHTTPError("no KEENABLE_API_KEY is configured")
+
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": KEENABLE_TOOL, "arguments": {"query": query}},
+    }
+    headers = {
+        "X-API-Key": api_key,
+        "Content-Type": "application/json",
+        # The endpoint may answer either way; say both are acceptable.
+        "Accept": "application/json, text/event-stream",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=KEENABLE_TIMEOUT) as client:
+            response = await client.post(KEENABLE_MCP_URL, json=payload, headers=headers)
+            response.raise_for_status()
+            body = response.json()
+    except httpx.HTTPStatusError as exc:
+        raise SkillHTTPError(f"Keenable answered HTTP {exc.response.status_code}") from exc
+    except (httpx.RequestError, ValueError) as exc:
+        raise SkillHTTPError(f"could not reach Keenable ({exc})") from exc
+
+    if "error" in body:
+        raise SkillHTTPError(f"Keenable refused the search ({body['error'].get('message')})")
+
+    text = "\n".join(
+        part.get("text", "")
+        for part in (body.get("result") or {}).get("content", [])
+        if part.get("type") == "text"
+    )
+    return parse_keenable_results(text)
+
+
 #: Engine registry - add a backend by adding an entry here.
 PROVIDERS: dict[str, object] = {
     "duckduckgo": search_duckduckgo,
+    "keenable": search_keenable,
 }
-DEFAULT_PROVIDER = "duckduckgo"
+
+#: Tried in this order. DuckDuckGo is free and usually enough; Keenable
+#: costs credits and is what answers when DuckDuckGo will not.
+PROVIDER_ORDER: tuple[str, ...] = ("duckduckgo", "keenable")
+
+#: How each engine is named to the model, so an answer can say where it
+#: came from.
+PROVIDER_LABELS = {"duckduckgo": "DuckDuckGo", "keenable": "Keenable"}
 
 
 def _clamp_read_pages(read_pages: object) -> int:
@@ -201,7 +298,12 @@ class WebSearchSkill(Skill):
         "properties": {
             "query": {
                 "type": "string",
-                "description": "Search keywords.",
+                "description": (
+                    "What to search for. Describe the page you want in "
+                    "a phrase rather than typing bare keywords - the "
+                    "fallback engine matches on meaning, and it costs "
+                    "the other engine nothing."
+                ),
             },
             "read_pages": {
                 "type": "integer",
@@ -217,22 +319,44 @@ class WebSearchSkill(Skill):
         "required": ["query"],
     }
 
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+
     async def run(self, query: str, read_pages: int = 0) -> str:
         query = query.strip()
         if not query:
             raise SkillHTTPError("Please provide a search query.")
 
-        provider_name = DEFAULT_PROVIDER
-        provider = PROVIDERS.get(provider_name)
-        if provider is None:
-            raise SkillHTTPError(f"No search provider '{provider_name}' available.")
-
-        results = await provider(query)
-        if not results:
-            raise SkillHTTPError(f"No search results for '{query}'.")
+        engine, results = await self._search(query)
 
         wanted = _clamp_read_pages(read_pages)
         if wanted:
             logger.info("Opening the top %d result(s) for '%s'.", wanted, query)
             await read_results(results, wanted)
-        return format_results(query, "DuckDuckGo", results)
+        return format_results(query, PROVIDER_LABELS.get(engine, engine), results)
+
+    async def _search(self, query: str) -> tuple[str, list[dict]]:
+        """First engine that answers, with why the others did not.
+
+        An engine that returns nothing counts as a failure and the next
+        one is tried: DuckDuckGo serving an empty page is far more often
+        a block than a query nobody has written about.
+        """
+        problems: list[str] = []
+        for name in PROVIDER_ORDER:
+            provider = PROVIDERS.get(name)
+            if provider is None:  # pragma: no cover - registry typo
+                continue
+            try:
+                results = await provider(query, self._settings)
+            except SkillHTTPError as exc:
+                logger.info("Search engine %s failed: %s", name, exc)
+                problems.append(f"{name}: {exc}")
+                continue
+            if results:
+                if name != PROVIDER_ORDER[0]:
+                    logger.info("Answered '%s' with the %s fallback.", query, name)
+                return name, results
+            problems.append(f"{name}: no results")
+
+        raise SkillHTTPError(f"Could not search for '{query}'. " + "; ".join(problems) + ".")

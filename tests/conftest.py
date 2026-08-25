@@ -44,6 +44,8 @@ def _isolated_font_cache(tmp_path, monkeypatch):
 FAKE_DNS = {
     "example.com": "93.184.216.34",
     "docs.example.org": "93.184.216.36",
+    "docs.python.org": "151.101.128.223",
+    "peps.python.org": "151.101.128.223",
     "evil.example": "93.184.216.35",
     "localhost": "127.0.0.1",
     "internal.example": "10.1.2.3",

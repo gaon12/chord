@@ -19,7 +19,7 @@ tools when a question needs real-world data.
 | Stock prices | `get_stock_price` | Yahoo Finance | - (key-less) |
 | Parcel tracking | `track_parcel` | SweetTracker 스마트택배 | CJ/우체국 site scraping |
 | Flight info | `get_flight_info` | Aviationstack | OpenSky radar + adsbdb |
-| Web search | `web_search` | DuckDuckGo lite (+ opens the results) | - (key-less) |
+| Web search | `web_search` | DuckDuckGo lite → Keenable (+ opens the results) | - (key-less; `KEENABLE_API_KEY` for the fallback) |
 | Read a link | `read_url` | any http(s) page | - (key-less) |
 | Places | `find_places` | Kakao Local (Korea) | OpenStreetMap Nominatim |
 | Directions | `get_directions` | Kakao Navi (Korea) | OSRM demo server |
@@ -196,9 +196,18 @@ not literally in the snippets, open the pages* — because a model that
 treats snippets as sources writes confident paragraphs out of two lines
 of preview text.
 
-> DuckDuckGo rate-limits bursts and will occasionally serve a "confirm
-> you are human" page instead of results. The bot reports that as what
-> it is and the next attempt a few minutes later usually works.
+**When DuckDuckGo says no.** It rate-limits bursts and serves a "confirm
+you are human" page instead of results, which there is no polite way to
+argue with. Set `KEENABLE_API_KEY` and the skill falls back to
+[Keenable](https://keenable.ai)'s live web index for that query — free
+engine first because it costs nothing, paid engine second because it
+answers. The reply says which one it used. An *empty* DuckDuckGo page
+falls through too: that is far more often a block than a query nobody
+has ever written about.
+
+Keenable matches on meaning rather than keywords, so the model is told
+to phrase queries as a description of the page it wants — which costs
+DuckDuckGo nothing and helps the fallback a lot.
 
 ### Reading links
 
