@@ -21,6 +21,22 @@ from chord.skills.base import Skill
 
 DUCKDUCKGO_LITE_URL = "https://lite.duckduckgo.com/lite/"
 
+#: DuckDuckGo answers an honest bot User-Agent with a 202 challenge page
+#: - "select all squares containing a duck" - and zero results. Every
+#: other skill here identifies itself truthfully, and should; this
+#: endpoint is a scraped HTML page rather than an API, and it serves
+#: browsers only.
+BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+    )
+}
+
+#: Words from that challenge page, so being blocked can be reported as
+#: being blocked instead of as "nothing matched your search".
+_CHALLENGE_MARKERS = ("bots use duckduckgo", "confirm this search was made by a human")
+
 #: Number of results returned to the model.
 MAX_RESULTS = 5
 
@@ -65,8 +81,23 @@ def parse_results(raw_html: str, limit: int = MAX_RESULTS) -> list[dict]:
 
 async def search_duckduckgo(query: str) -> list[dict]:
     """Default engine: key-less DuckDuckGo lite."""
-    raw_html = await get_text(DUCKDUCKGO_LITE_URL, params={"q": query})
+    raw_html = await get_text(
+        DUCKDUCKGO_LITE_URL,
+        params={"q": query},
+        headers=BROWSER_HEADERS,
+    )
+    if is_challenge_page(raw_html):
+        raise SkillHTTPError(
+            "DuckDuckGo is asking for a human to solve a challenge, so "
+            "search is unavailable right now. Try again in a few minutes."
+        )
     return parse_results(raw_html)
+
+
+def is_challenge_page(raw_html: str) -> bool:
+    """Whether DuckDuckGo served its anti-bot page instead of results."""
+    lowered = raw_html.lower()
+    return any(marker in lowered for marker in _CHALLENGE_MARKERS)
 
 
 #: Engine registry - add a backend by adding an entry here.

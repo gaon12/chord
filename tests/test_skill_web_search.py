@@ -7,10 +7,12 @@ import respx
 
 from chord.skills._http import SkillHTTPError
 from chord.skills.web_search import (
+    BROWSER_HEADERS,
     DUCKDUCKGO_LITE_URL,
     WebSearchSkill,
     decode_ddg_redirect,
     format_results,
+    is_challenge_page,
     parse_results,
 )
 
@@ -85,3 +87,41 @@ async def test_web_search_no_results_raises():
 async def test_empty_query_fails_fast():
     with pytest.raises(SkillHTTPError, match="provide a search query"):
         await WebSearchSkill().run(query="   ")
+
+
+# -- Getting past the front door -------------------------------------------------------
+
+
+CHALLENGE_HTML = """
+<html><body><h1>DuckDuckGo</h1>
+<p>Unfortunately, bots use DuckDuckGo too. Please complete the following
+challenge to confirm this search was made by a human.</p>
+<p>Select all squares containing a duck:</p>
+</body></html>
+"""
+
+
+@respx.mock
+async def test_the_search_request_does_not_identify_itself_as_a_bot():
+    """An honest User-Agent gets a 202 challenge and zero results."""
+    route = respx.get(DUCKDUCKGO_LITE_URL).respond(text=DDG_HTML)
+
+    await WebSearchSkill().run(query="anything")
+
+    sent = route.calls.last.request.headers["user-agent"]
+    assert sent == BROWSER_HEADERS["User-Agent"]
+    assert "bot" not in sent.lower()
+
+
+def test_the_challenge_page_is_recognized():
+    assert is_challenge_page(CHALLENGE_HTML) is True
+    assert is_challenge_page(DDG_HTML) is False
+
+
+@respx.mock
+async def test_being_blocked_is_reported_as_being_blocked():
+    """ "No results" would send the user off rewording a fine query."""
+    respx.get(DUCKDUCKGO_LITE_URL).respond(status_code=202, text=CHALLENGE_HTML)
+
+    with pytest.raises(SkillHTTPError, match="challenge"):
+        await WebSearchSkill().run(query="python")
