@@ -20,6 +20,7 @@ tools when a question needs real-world data.
 | Parcel tracking | `track_parcel` | SweetTracker 스마트택배 | CJ/우체국 site scraping |
 | Flight info | `get_flight_info` | Aviationstack | OpenSky radar + adsbdb |
 | Web search | `web_search` | DuckDuckGo lite | - (key-less) |
+| Read a link | `read_url` | any http(s) page | - (key-less) |
 | Places | `find_places` | Kakao Local (Korea) | OpenStreetMap Nominatim |
 | Directions | `get_directions` | Kakao Navi (Korea) | OSRM demo server |
 | Date/time & timezones | `get_current_datetime`, `convert_timezone` | pure Python | - |
@@ -112,6 +113,10 @@ python -m chord        # or just `chord`, both start the bot
 * `/persona` - view or reload the character definition.
 * `/reasoning` - view or change how hard the bot thinks before answering.
 
+**Links**: paste a URL and ask — *"이거 요약해줘"*, *"뭐라고 써있어?"* — and the
+bot opens the page, pulls out the readable text and answers from it. See
+[Reading links](#reading-links).
+
 **Charts**: ask for a trend and the answer comes back with a picture —
 *"달러 환율 최근 3개월 추이 보여줘"*, *"테슬라 한 달 차트"*, *"비트코인 2주 흐름"*.
 The bot renders a PNG and attaches it to the reply; see
@@ -170,6 +175,31 @@ rather than showing a level that does nothing.
 Chain-of-thought that a model prints into its answer (`<thought>...`,
 `<think>...`) is stripped before sending, so the reasoning never reaches
 the channel. Text inside fenced code blocks is left alone.
+
+### Reading links
+
+`read_url` opens an http(s) page and returns its readable text, so a
+pasted link can be summarized, quoted or questioned. Scripts, styles,
+nav bars and footers are stripped; `<article>`/`<main>` wins when the
+page marks it. JSON and plain text pass through untouched.
+
+It will not read PDFs, images, or pages that build themselves with
+JavaScript — the bot is an HTTP client, not a browser, and it says so
+rather than reporting an empty page as an empty article.
+
+**It will not open your network either.** This is the one tool whose
+address comes from whoever is chatting, so before each request — and
+again after each redirect — the host must resolve to a public address.
+`localhost`, `10.x`, `192.168.x`, `169.254.169.254` (cloud credentials)
+and non-http schemes are refused. That is a guard, not a guarantee: a
+name that resolves differently between the check and the connection
+still gets through, which raises the bar from "paste a link" to "run a
+DNS server".
+
+Pages are capped at 2 MB downloaded and ~5000 characters returned (the
+model may ask for up to 15000). Everything returned lands in the channel
+history and is re-sent with every later message, so the cap is a running
+cost, not just a limit.
 
 ### Price history charts
 
