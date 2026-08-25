@@ -22,7 +22,7 @@ from typing import ClassVar
 
 from chord.skills._fetch import fetch_page
 from chord.skills._http import SkillHTTPError
-from chord.skills._readable import extract_readable
+from chord.skills._readable import extract_readable, fence_untrusted
 from chord.skills.base import Skill
 
 #: Characters handed back by default. Enough for a long article's worth
@@ -91,4 +91,4 @@ class ReadUrlSkill(Skill):
             f"{len(body):,} characters shown"
             + (f" of {len(text):,}+ - the rest was cut" if cut else "")
         )
-        return "\n".join(header) + "\n\n" + body
+        return "\n".join(header) + "\n\n" + fence_untrusted(body, page.url)

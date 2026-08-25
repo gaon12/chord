@@ -31,7 +31,7 @@ import httpx
 from chord.config import Settings
 from chord.skills._fetch import fetch_page
 from chord.skills._http import SkillHTTPError, get_text
-from chord.skills._readable import extract_readable
+from chord.skills._readable import extract_readable, fence_untrusted
 from chord.skills.base import Skill
 
 logger = logging.getLogger(__name__)
@@ -280,6 +280,10 @@ def format_results(query: str, provider: str, results: list[dict]) -> str:
             lines.append(f"   {item['snippet']}")
         if item.get("page"):
             lines.append(f"   [page] {item['page']}")
+    if any(item.get("page") for item in results):
+        # The snippets come from the engine; the page text comes from
+        # whoever wrote the page, and that difference matters.
+        return fence_untrusted("\n".join(lines), "web search results")
     return "\n".join(lines)
 
 
