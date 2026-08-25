@@ -10,17 +10,21 @@ untouched and returning the completion as-is.
 from __future__ import annotations
 
 import pytest
-from openai import BadRequestError
+from openai import BadRequestError, RateLimitError
 from openai.types.chat import ChatCompletion
 
 from chord.config import Settings
 from chord.llm import (
+    DEFAULT_RATE_LIMIT_WAIT,
     GEMINI_HARM_CATEGORIES,
+    MAX_RATE_LIMIT_WAIT,
     LLMService,
     build_extra_body,
     create_client,
+    gemini_safety_settings,
     is_reasoning_rejection,
     merge_extra_body,
+    rate_limit_delay,
 )
 
 API_BASE = "http://llm.test/v1"
@@ -316,17 +320,27 @@ async def test_no_extra_body_is_sent_by_default():
     assert "extra_body" not in fake.chat.completions.calls[0]
 
 
-def test_safety_off_asks_gemini_to_stop_blocking_every_category():
-    """A category left out keeps its default, so all of them are listed."""
-    body = build_extra_body(_gemini_settings(llm_safety_filters="off"))
+def test_safety_off_sends_nothing_because_nothing_accepts_it(caplog):
+    """Google's compat endpoint rejects safety_settings outright, and it
+    was the only provider this ever targeted - so the shortcut emits no
+    payload rather than one guaranteed 400 per process."""
+    with caplog.at_level("WARNING"):
+        body = build_extra_body(_gemini_settings(llm_safety_filters="off"))
 
-    settings_sent = body["extra_body"]["google"]["safety_settings"]
+    assert body == {}
+    assert "no effect" in caplog.text
+    assert "persona.md" in caplog.text
+
+
+def test_the_documented_payload_is_still_available_to_anyone_who_wants_it():
+    """It is the right shape per the docs; the API just has no such field."""
+    settings_sent = gemini_safety_settings()["extra_body"]["google"]["safety_settings"]
+
     assert {entry["category"] for entry in settings_sent} == set(GEMINI_HARM_CATEGORIES)
     assert {entry["threshold"] for entry in settings_sent} == {"BLOCK_NONE"}
 
 
-def test_safety_off_is_a_no_op_on_providers_without_the_knob(caplog):
-    """Silently sending Gemini fields to OpenAI would just 400."""
+def test_safety_off_warns_on_any_provider(caplog):
     with caplog.at_level("WARNING"):
         body = build_extra_body(_settings().model_copy(update={"llm_safety_filters": "off"}))
 
@@ -334,39 +348,19 @@ def test_safety_off_is_a_no_op_on_providers_without_the_knob(caplog):
     assert "no effect" in caplog.text
 
 
-async def test_safety_off_reaches_the_request():
+async def test_the_escape_hatch_still_reaches_the_request():
     fake = FakeClient(CHAT_RESPONSE)
-    service = LLMService(_gemini_settings(llm_safety_filters="off"), client=fake)
+    service = LLMService(
+        _gemini_settings(
+            llm_extra_body='{"extra_body": {"google": {"thinking_config": {"thinking_budget": 0}}}}'
+        ),
+        client=fake,
+    )
 
     await service.complete(messages=[{"role": "user", "content": "hi"}])
 
     sent = fake.chat.completions.calls[0]["extra_body"]
-    assert sent["extra_body"]["google"]["safety_settings"]
-
-
-def test_extra_body_json_is_merged_next_to_the_safety_settings():
-    """A hand-written google.* field must not wipe the ones we generated."""
-    body = build_extra_body(
-        _gemini_settings(
-            llm_safety_filters="off",
-            llm_extra_body='{"extra_body": {"google": {"cached_content": "abc"}}}',
-        )
-    )
-
-    google = body["extra_body"]["google"]
-    assert google["cached_content"] == "abc"
-    assert len(google["safety_settings"]) == len(GEMINI_HARM_CATEGORIES)
-
-
-def test_hand_written_json_wins_over_the_shortcut():
-    body = build_extra_body(
-        _gemini_settings(
-            llm_safety_filters="off",
-            llm_extra_body='{"extra_body": {"google": {"safety_settings": []}}}',
-        )
-    )
-
-    assert body["extra_body"]["google"]["safety_settings"] == []
+    assert sent["extra_body"]["google"]["thinking_config"] == {"thinking_budget": 0}
 
 
 def test_merge_extra_body_leaves_its_inputs_alone():
@@ -419,10 +413,139 @@ async def test_a_reasoning_rejection_leaves_the_extra_body_in_place():
     fake.chat.completions = RejectingCompletions(
         CHAT_RESPONSE, "Thinking level is not supported for this model."
     )
-    service = LLMService(_gemini_settings(llm_safety_filters="off"), client=fake)
+    service = LLMService(
+        _gemini_settings(llm_extra_body='{"extra_body": {"google": {"cached_content": "x"}}}'),
+        client=fake,
+    )
 
     await service.complete(messages=[{"role": "user", "content": "hi"}])
 
     last = fake.chat.completions.calls[-1]
     assert "reasoning_effort" not in last
     assert "extra_body" in last
+
+
+# -- Waiting out a rate limit ------------------------------------------------------------
+
+
+class _Headers(dict):
+    pass
+
+
+def _rate_limited(message: str = "429 rate limit", retry_after: str | None = None):
+    exc = RateLimitError.__new__(RateLimitError)
+    Exception.__init__(exc, message)
+    if retry_after is not None:
+        response = type("R", (), {"headers": _Headers({"retry-after": retry_after})})()
+        exc.response = response
+    return exc
+
+
+def test_a_retry_after_header_is_honoured():
+    assert rate_limit_delay(_rate_limited(retry_after="30")) == 30.0
+
+
+def test_geminis_retry_delay_in_the_body_is_found():
+    """It puts the backoff in a RetryInfo detail, not in a header."""
+    body = "Error code: 429 - {'details': [{'@type': '...RetryInfo', 'retryDelay': '38s'}]}"
+
+    assert rate_limit_delay(_rate_limited(body)) == 38.0
+
+
+def test_a_limit_with_no_advice_returns_nothing():
+    assert rate_limit_delay(_rate_limited()) is None
+
+
+def test_a_nonsense_retry_after_is_ignored():
+    assert rate_limit_delay(_rate_limited(retry_after="soon")) is None
+
+
+class RateLimitedOnce(FakeCompletions):
+    """429 first, then answers - a per-minute quota reopening."""
+
+    def __init__(self, response: dict, error):
+        super().__init__(response)
+        self._error = error
+        self._first = True
+
+    async def create(self, **kwargs) -> ChatCompletion:
+        if self._first:
+            self._first = False
+            self.calls.append(kwargs)
+            raise self._error
+        return await super().create(**kwargs)
+
+
+async def test_a_rate_limit_is_waited_out_rather_than_surrendered_to(monkeypatch):
+    """The SDK's own ladder gives up in under two seconds; a token-per-
+    minute quota needs most of a minute."""
+    slept: list[float] = []
+
+    async def fake_sleep(seconds):
+        slept.append(seconds)
+
+    monkeypatch.setattr("chord.llm.asyncio.sleep", fake_sleep)
+    fake = FakeClient(CHAT_RESPONSE)
+    fake.chat.completions = RateLimitedOnce(CHAT_RESPONSE, _rate_limited(retry_after="12"))
+    service = LLMService(_settings(), client=fake)
+
+    completion = await service.complete(messages=[{"role": "user", "content": "hi"}])
+
+    assert completion.choices[0].message.content == "hello!"
+    assert slept == [12.0]
+
+
+async def test_the_wait_is_capped_so_a_turn_cannot_hang(monkeypatch):
+    slept: list[float] = []
+
+    async def fake_sleep(seconds):
+        slept.append(seconds)
+
+    monkeypatch.setattr("chord.llm.asyncio.sleep", fake_sleep)
+    fake = FakeClient(CHAT_RESPONSE)
+    fake.chat.completions = RateLimitedOnce(CHAT_RESPONSE, _rate_limited(retry_after="600"))
+    service = LLMService(_settings(), client=fake)
+
+    await service.complete(messages=[{"role": "user", "content": "hi"}])
+
+    assert slept == [MAX_RATE_LIMIT_WAIT]
+
+
+async def test_without_advice_a_sensible_default_is_used(monkeypatch):
+    slept: list[float] = []
+
+    async def fake_sleep(seconds):
+        slept.append(seconds)
+
+    monkeypatch.setattr("chord.llm.asyncio.sleep", fake_sleep)
+    fake = FakeClient(CHAT_RESPONSE)
+    fake.chat.completions = RateLimitedOnce(CHAT_RESPONSE, _rate_limited())
+    service = LLMService(_settings(), client=fake)
+
+    await service.complete(messages=[{"role": "user", "content": "hi"}])
+
+    assert slept == [DEFAULT_RATE_LIMIT_WAIT]
+
+
+class AlwaysRateLimited(FakeCompletions):
+    async def create(self, **kwargs) -> ChatCompletion:
+        self.calls.append(kwargs)
+        raise _rate_limited()
+
+
+async def test_it_waits_once_not_forever(monkeypatch):
+    """Two minutes of a chat turn on a quota that is not ours today is
+    worse than saying so."""
+
+    async def fake_sleep(seconds):
+        return None
+
+    monkeypatch.setattr("chord.llm.asyncio.sleep", fake_sleep)
+    fake = FakeClient(CHAT_RESPONSE)
+    fake.chat.completions = AlwaysRateLimited(CHAT_RESPONSE)
+    service = LLMService(_settings(), client=fake)
+
+    with pytest.raises(RateLimitError):
+        await service.complete(messages=[{"role": "user", "content": "hi"}])
+
+    assert len(fake.chat.completions.calls) == 2

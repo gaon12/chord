@@ -427,11 +427,17 @@ switch:
    that was trained to decline something declines it; changing
    `OPENAI_MODEL` is the only real lever.
 3. **The provider's content filter** - a separate classifier in front of
-   the model. `LLM_SAFETY_FILTERS=off` lowers it where the provider
-   exposes a threshold, which today means the Gemini API: chord then
-   sends every harm category at `BLOCK_NONE`. On any other base URL
-   there is no such knob, so the bot logs a warning and sends nothing
-   rather than pretending.
+   the model. There is no knob for this over the OpenAI-compatible wire
+   format. `LLM_SAFETY_FILTERS=off` exists and logs where refusals
+   really come from, but sends nothing: Google's compat endpoint
+   rejects `safety_settings` outright (`Unknown name "safety_settings"
+   at 'extra_body.google'`, on both `gemma-4-31b-it` and
+   `gemini-2.5-flash`), while `thinking_config` in the same object is
+   accepted - so the nesting is right and the field is simply not
+   there. Use `LLM_EXTRA_BODY` if your provider accepts something.
+
+**In practice: edit `persona.md`.** Of the three, it is the one that is
+both the usual cause and the one you control.
 
 For provider extras chord has no setting for, `LLM_EXTRA_BODY` takes a
 raw JSON object that is merged into every request (deeply, and it wins

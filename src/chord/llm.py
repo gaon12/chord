@@ -10,12 +10,14 @@ The bot never talks to the `openai` package directly; it goes through
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import logging
+import re
 from collections.abc import Iterable
 from typing import Any
 
-from openai import AsyncOpenAI, BadRequestError
+from openai import AsyncOpenAI, BadRequestError, RateLimitError
 from openai.types.chat import ChatCompletion, ChatCompletionToolParam
 
 from chord.config import Settings
@@ -47,9 +49,8 @@ _EXTRA_BODY_REJECTION_MARKERS = (
     "safety setting",
 )
 
-#: Gemini's harm categories. Every one has to be listed explicitly - a
-#: category left out keeps the provider default, so a partial list reads
-#: as "off" but behaves as "mostly on".
+#: Gemini's harm categories, kept for whoever wires them up through
+#: LLM_EXTRA_BODY against an endpoint that accepts them.
 GEMINI_HARM_CATEGORIES = (
     "HARM_CATEGORY_HARASSMENT",
     "HARM_CATEGORY_HATE_SPEECH",
@@ -57,6 +58,44 @@ GEMINI_HARM_CATEGORIES = (
     "HARM_CATEGORY_DANGEROUS_CONTENT",
     "HARM_CATEGORY_CIVIC_INTEGRITY",
 )
+
+
+#: How long to wait out a rate limit before answering anyway. The SDK's
+#: own retry ladder starts under a second, which is right for a
+#: per-second limit and useless against a per-minute token quota - the
+#: window it needs to clear is sixty seconds wide. Capped so a chat turn
+#: cannot hang: past this, saying "try again shortly" is the better
+#: answer than a reply nobody is still waiting for.
+MAX_RATE_LIMIT_WAIT = 45.0
+
+#: What to wait when the provider does not say. Long enough to cross
+#: most of a per-minute window, short enough to still be a conversation.
+DEFAULT_RATE_LIMIT_WAIT = 20.0
+
+#: Gemini reports its own backoff inside the error body rather than in a
+#: Retry-After header: "retryDelay": "38s".
+_RETRY_DELAY_RE = re.compile(r"retry[-_ ]?delay['\"]?\s*[:=]\s*['\"]?(\d+(?:\.\d+)?)s?", re.I)
+
+
+def rate_limit_delay(error: Exception) -> float | None:
+    """How long the provider asked us to wait, if it said.
+
+    Checks the Retry-After header first, then the retryDelay the Gemini
+    API puts in the error body. Returns None when neither is present, so
+    the caller can pick its own wait rather than inventing one here.
+    """
+    response = getattr(error, "response", None)
+    header = getattr(response, "headers", None)
+    if header is not None:
+        raw = header.get("retry-after") or header.get("Retry-After")
+        if raw:
+            try:
+                return float(raw)
+            except (TypeError, ValueError):
+                pass
+
+    match = _RETRY_DELAY_RE.search(str(error))
+    return float(match.group(1)) if match else None
 
 
 def is_reasoning_rejection(message: str) -> bool:
@@ -77,15 +116,11 @@ def is_google_endpoint(base_url: str) -> bool:
 
 
 def gemini_safety_settings(threshold: str = "BLOCK_NONE") -> dict[str, Any]:
-    """Gemini safety thresholds, wrapped the way the compat layer wants.
+    """The payload Google documents for lowering its safety filter.
 
-    The OpenAI-compatible endpoint tunnels Gemini-only request fields
-    through a nested ``extra_body.google`` object - the outer key really
-    is named ``extra_body`` again, which looks like a typo and is not.
-
-    ``BLOCK_NONE`` turns off *probability-based blocking* by the API's
-    filter. It does not touch what the model itself was trained to
-    decline, which is where most surprising refusals actually come from.
+    Kept because it is the correct shape *per the documentation*, and
+    because ``LLM_EXTRA_BODY`` is how anyone would send it - but chord
+    no longer sends it on its own. See :func:`build_extra_body`.
     """
     return {
         "extra_body": {
@@ -118,23 +153,31 @@ def merge_extra_body(base: dict[str, Any], override: dict[str, Any]) -> dict[str
 def build_extra_body(settings: Settings) -> dict[str, Any]:
     """Provider extras to send with every request, from settings.
 
-    Two sources, merged: the ``LLM_SAFETY_FILTERS`` shortcut and the raw
-    ``LLM_EXTRA_BODY`` escape hatch, with the raw JSON winning so an
-    operator can always override what the shortcut produced.
+    ``LLM_SAFETY_FILTERS=off`` produces nothing. It used to emit the
+    payload Google documents, and that payload is rejected: the
+    OpenAI-compatible endpoint answers
+
+        Unknown name "safety_settings" at 'extra_body.google'
+
+    for gemma-4-31b-it and gemini-2.5-flash alike, while
+    ``thinking_config`` in the same object is accepted - so the nesting
+    is right and the field simply is not there. Sending it bought one
+    guaranteed 400 per process and no change in behaviour.
+
+    The knob stays because the *question* is real and the answer may
+    change; what it does now is say where refusals actually come from.
+    ``LLM_EXTRA_BODY`` remains the way to send whatever a provider does
+    accept.
     """
-    body: dict[str, Any] = {}
     if settings.llm_safety_filters == "off":
-        if is_google_endpoint(settings.openai_base_url):
-            body = gemini_safety_settings()
-        else:
-            logger.warning(
-                "LLM_SAFETY_FILTERS=off has no effect on %s - only the Gemini "
-                "API exposes a filter threshold over the OpenAI-compatible "
-                "wire format. Refusals from other providers come from the "
-                "model's own training and from persona.md, not from a knob.",
-                settings.openai_base_url,
-            )
-    return merge_extra_body(body, settings.extra_body)
+        logger.warning(
+            "LLM_SAFETY_FILTERS=off has no effect: no OpenAI-compatible "
+            "endpoint chord can reach exposes a content-filter threshold "
+            "(Google's rejects safety_settings outright). Refusals come "
+            "from the model's own training and from the Boundaries "
+            "section of persona.md - persona.md is the one you can edit."
+        )
+    return merge_extra_body({}, settings.extra_body)
 
 
 def create_client(settings: Settings) -> AsyncOpenAI:
@@ -217,6 +260,7 @@ class LLMService:
         if self._extra_body and self._extra_body_supported:
             kwargs["extra_body"] = self._extra_body
 
+        waited_out_a_limit = False
         while True:
             try:
                 return await self._client.chat.completions.create(**kwargs)
@@ -226,6 +270,32 @@ class LLMService:
                 # Each drop removes a key for good, so this ends.
                 if not self._drop_rejected_option(str(exc), kwargs):
                     raise
+            except RateLimitError as exc:
+                # Once. A second wait would mean two minutes of a chat
+                # turn spent on a quota that is clearly not ours today.
+                if waited_out_a_limit:
+                    raise
+                waited_out_a_limit = True
+                await self._wait_out_rate_limit(exc)
+
+    async def _wait_out_rate_limit(self, error: RateLimitError) -> None:
+        """Sleep long enough for a per-minute quota to reopen.
+
+        The SDK already retried on its own ladder - roughly 0.4s then
+        0.9s - and those are the right numbers for a per-second limit
+        and the wrong ones for a token-per-minute quota, which is what a
+        large tool catalog actually runs into. The window is sixty
+        seconds wide; sub-second retries just spend the attempts.
+        """
+        asked = rate_limit_delay(error)
+        wait = min(asked if asked is not None else DEFAULT_RATE_LIMIT_WAIT, MAX_RATE_LIMIT_WAIT)
+        logger.warning(
+            "Rate limited by %s; waiting %.0fs before one more try%s.",
+            self.model,
+            wait,
+            " (provider asked for it)" if asked is not None else "",
+        )
+        await asyncio.sleep(wait)
 
     def _drop_rejected_option(self, error: str, kwargs: dict) -> bool:
         """Remove the optional parameter a 400 blamed; False if none did.
