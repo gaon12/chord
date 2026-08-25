@@ -205,13 +205,33 @@ DMs. That is Discord's own rule about where adult content may be posted
 reported — so the gate reads the channel's NSFW flag rather than
 guessing. Out of band, with no channel bound at all, the answer is no.
 
+Three ways in:
+
+* `area="search"` (the default) — free text. Every word must appear in
+  the title or tags: *"touhou reimu"*, *"레이무"*.
+* `area="id"` — a gallery number, straight to its metadata.
+* `area="tag" | "artist" | "series" | "character" | "group" | "type"` —
+  an exact index lookup by that field. An empty query gives the newest
+  uploads.
+
 The site is a single-page app with no search API: the browser downloads
-binary index files and filters them itself. Those files are the API.
+index files and filters them itself. Those files are the API.
 `{area}/{name}-{language}.nozomi` is a flat array of big-endian int32
 gallery ids, newest first, so the newest N results are the first 4N
 bytes — one ranged request instead of a multi-megabyte download. Each id
 then resolves through `galleries/{id}.js`, which is JSON behind a `var`
 assignment.
+
+Free text is a second structure: a B-tree walked with ranged requests,
+keyed by the first four bytes of `sha256(term)`, each hit pointing into
+a companion data file of gallery ids. Multi-word queries intersect the
+posting lists, because nothing joins them server-side.
+
+Scoping free text to a language means intersecting with that language's
+index — 400 kB for Korean, cached for an hour. The obvious shortcut,
+resolving the newest few dozen hits and keeping whichever match, answers
+"no results" for any language that is not the bulk of the site, which
+for Korean it never is.
 
 Language defaults to Korean; `한국어`, `kr`, `일본어`, `전체` and friends are
 accepted as aliases.
