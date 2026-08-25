@@ -35,6 +35,7 @@ from chord.mcp_client import McpManager
 from chord.persona import PersonaProvider, with_tool_index
 from chord.reminders import ReminderStore
 from chord.skills import create_default_registry
+from chord.skills._http import close_shared_client
 from chord.skills._quota import get_quota_store, render_usage
 from chord.skills.capabilities import render_capabilities
 from chord.skills.registry import SkillRegistry
@@ -586,6 +587,7 @@ class ChordBot(discord.Client):
         self._reminder_loop.cancel()
         self._mcp_reload_loop.cancel()
         await self._mcp.stop()
+        await close_shared_client()
         await super().close()
 
     # -- Events -----------------------------------------------------------------

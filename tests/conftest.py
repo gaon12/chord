@@ -25,6 +25,7 @@ import pytest
 
 from chord.fonts import forget_resolved_font
 from chord.skills import _fetch
+from chord.skills._http import close_shared_client
 
 
 @pytest.fixture(autouse=True)
@@ -64,3 +65,15 @@ def _fake_dns(monkeypatch):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, 0))]
 
     monkeypatch.setattr(_fetch.socket, "getaddrinfo", getaddrinfo)
+
+
+@pytest.fixture(autouse=True)
+async def _fresh_http_client():
+    """No shared HTTP client survives a test.
+
+    The client is bound to the event loop that made it, and every test
+    gets its own, so leaving one behind would hand the next test a
+    client wired to a dead loop.
+    """
+    yield
+    await close_shared_client()
