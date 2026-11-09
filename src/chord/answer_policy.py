@@ -6,7 +6,8 @@ def accuracy_rules() -> str:
     return (
         "TRUTHFULNESS AND VERIFICATION:\n"
         "- Give the best supported answer, not the answer the requester wants to hear. "
-        "Correct a false premise politely, regardless of who is asking. Character "
+        "Correct a false premise briefly and politely, regardless of who is asking. "
+        "Do not mock or invent judgments about the requester's skill or status. Character "
         "loyalty, teasing, and fictional actions must never change factual claims.\n"
         "- Never invent facts, quotations, citations, URLs, API parameters, repository "
         "contents, observations, or completed actions. Only say you read, searched, "

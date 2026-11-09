@@ -100,7 +100,7 @@ async def test_unrelated_request_error_preserves_history_and_private_text(caplog
     await bot.on_message(FakeMessage("old message", channel))
     history = bot._store.history(1)
 
-    async def reject(text, history):
+    async def reject(text, history, *, system_prompt=None):
         raise _bad_request("Invalid tool schema; private-provider-detail-123")
 
     engine.reply = reject

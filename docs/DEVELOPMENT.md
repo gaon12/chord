@@ -53,6 +53,8 @@ src/chord/
   discord_text.py   incoming message context and reply cleanup
   message_splitter.py  message limits and balanced code fences
   channel_turns.py  per-channel turn serialization
+  answer_policy.py shared factual-answer and uncertainty rules
+  account_preferences.py  automatic reply detail for a verified account
   engine.py         one turn = LLM <-> tools loop (max 6 rounds)
   tool_catalog.py   per-turn schema selection and offered-tool checks
   conversation.py   per-channel history (RAM only)
@@ -105,6 +107,12 @@ behavior independent of the character's tone.
 Each channel processes one complete turn at a time, including history updates
 and compaction. Different channels can proceed independently. `/reset` uses
 the same boundary so a pending reply cannot restore cleared history.
+
+Each turn passes its own system-prompt snapshot to `ChatEngine.reply`.
+Account-specific answer detail must not be written into the shared engine's
+default prompt or stored in conversation history. Match gaon12 by the verified
+Discord user ID in `account_preferences.py`; names and message text are not
+identity checks. See [Persona guide](PERSONA.md#automatic-detail-for-gaon12).
 Idle channel locks are released, and conversation storage keeps at most 1000
 recently updated channels. Reading an unknown channel creates no stored entry.
 

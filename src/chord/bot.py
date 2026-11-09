@@ -16,6 +16,7 @@ from discord import app_commands
 from discord.ext import tasks
 from openai import APITimeoutError, BadRequestError, RateLimitError
 
+from chord.account_preferences import reply_guidance_for_user
 from chord.attachments import Attachment, collected, reset_attachments, start_collecting
 from chord.channel_turns import ChannelTurns
 from chord.compaction import HistoryCompactor
@@ -293,7 +294,10 @@ class ChordBot(discord.Client):
         )
 
         channel_id = message.channel.id
-        self._engine.system_prompt = self._system_prompt()
+        # Snapshot the prompt before typing() can yield. Another channel may
+        # answer concurrently, so account-specific guidance must never live
+        # in the shared engine's mutable default prompt.
+        system_prompt = self._system_prompt(getattr(message.author, "id", None))
         token = set_current_channel(
             channel_id,
             nsfw=channel_is_nsfw(message.channel),
@@ -307,7 +311,7 @@ class ChordBot(discord.Client):
         async with message.channel.typing():
             try:
                 answer, new_messages = await self._engine.reply(
-                    prompt_text, self._store.history(channel_id)
+                    prompt_text, self._store.history(channel_id), system_prompt=system_prompt
                 )
             except RateLimitError:
                 logger.warning(
@@ -373,13 +377,15 @@ class ChordBot(discord.Client):
 
     # -- Internals ---------------------------------------------------------------
 
-    def _system_prompt(self) -> str:
+    def _system_prompt(self, author_id: int | None = None) -> str:
         """Persona, rules, and a menu of the tools that exist right now.
 
         Built per message rather than cached: persona.md hot-reloads, and
         the MCP catalog changes under a running bot.
         """
-        return with_tool_index(self._persona.get(), self._registry.to_openai_tools())
+        prompt = with_tool_index(self._persona.get(), self._registry.to_openai_tools())
+        guidance = reply_guidance_for_user(author_id)
+        return f"{prompt}\n\n{guidance}" if guidance else prompt
 
     async def _compact_history(self, channel_id: int) -> None:
         """Summarize old turns once a channel outgrows its token budget.

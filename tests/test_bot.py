@@ -46,7 +46,9 @@ class StubEngine:
     def system_prompt(self, value):
         self.system_prompt_value = value
 
-    async def reply(self, user_text, history):
+    async def reply(self, user_text, history, *, system_prompt=None):
+        if system_prompt is not None:
+            self.system_prompt = system_prompt
         self.calls.append((user_text, history))
         return ("answer!", [{"role": "user", "content": user_text}])
 
@@ -292,7 +294,7 @@ async def test_engine_failure_sends_friendly_error():
     bot, engine = _bot()
     channel = FakeChannel()
 
-    async def boom(user_text, history):
+    async def boom(user_text, history, *, system_prompt=None):
         raise RuntimeError("llm down")
 
     engine.reply = boom
@@ -348,7 +350,7 @@ async def test_the_turn_knows_it_is_in_a_marked_channel():
     seen = {}
 
     class PeekingEngine(StubEngine):
-        async def reply(self, user_text, history):
+        async def reply(self, user_text, history, *, system_prompt=None):
             seen["allowed"] = channel_allows_age_restricted()
             return await super().reply(user_text, history)
 
@@ -365,7 +367,7 @@ async def test_an_ordinary_guild_channel_is_not_unlocked():
     seen = {}
 
     class PeekingEngine(StubEngine):
-        async def reply(self, user_text, history):
+        async def reply(self, user_text, history, *, system_prompt=None):
             seen["allowed"] = channel_allows_age_restricted()
             return await super().reply(user_text, history)
 
@@ -382,7 +384,7 @@ async def test_a_dm_is_treated_as_age_restricted():
     seen = {}
 
     class PeekingEngine(StubEngine):
-        async def reply(self, user_text, history):
+        async def reply(self, user_text, history, *, system_prompt=None):
             seen["allowed"] = channel_allows_age_restricted()
             return await super().reply(user_text, history)
 
@@ -599,7 +601,7 @@ class AttachingEngine(StubEngine):
         self.answer = answer
         self.count = count
 
-    async def reply(self, user_text, history):
+    async def reply(self, user_text, history, *, system_prompt=None):
         for index in range(self.count):
             attach(f"chart{index}.png", b"\x89PNG fake")
         self.calls.append((user_text, history))
@@ -1018,7 +1020,7 @@ async def test_leaked_reasoning_never_reaches_the_channel():
     bot, engine = _bot()
     channel = FakeChannel()
 
-    async def reply(user_text, history):
+    async def reply(user_text, history, *, system_prompt=None):
         return ("<thought>thinking…</thought>Hi!", [{"role": "user", "content": user_text}])
 
     engine.reply = reply
@@ -1035,7 +1037,7 @@ async def test_llm_timeout_gets_its_own_message():
     bot, engine = _bot()
     channel = FakeChannel()
 
-    async def stall(user_text, history):
+    async def stall(user_text, history, *, system_prompt=None):
         raise APITimeoutError(request=None)
 
     engine.reply = stall
@@ -1109,7 +1111,7 @@ async def test_rate_limit_gets_its_own_message():
     bot, engine = _bot()
     channel = FakeChannel()
 
-    async def throttled(user_text, history):
+    async def throttled(user_text, history, *, system_prompt=None):
         exc = RateLimitError.__new__(RateLimitError)
         Exception.__init__(exc, "429 quota exceeded")
         raise exc
@@ -1147,7 +1149,7 @@ async def test_rejected_history_is_cleared_so_the_channel_recovers():
     await bot.on_message(FakeMessage("<@999> one", channel, mentions=[FakeUser(999)], guild="g"))
     assert bot._store.history(channel.id)  # history exists now
 
-    async def rejected(user_text, history):
+    async def rejected(user_text, history, *, system_prompt=None):
         raise _bad_request(HISTORY_400)
 
     engine.reply = rejected
@@ -1165,7 +1167,7 @@ async def test_the_next_message_works_again_after_recovery():
 
     failed_once = []
 
-    async def rejected_once(user_text, history):
+    async def rejected_once(user_text, history, *, system_prompt=None):
         if not failed_once:
             failed_once.append(True)
             raise _bad_request(HISTORY_400)
@@ -1183,7 +1185,7 @@ async def test_bad_request_without_history_is_not_blamed_on_history():
     bot, engine = _bot()
     channel = FakeChannel()
 
-    async def rejected(user_text, history):
+    async def rejected(user_text, history, *, system_prompt=None):
         raise _bad_request("400 - Invalid JSON schema for function 'add'.")
 
     engine.reply = rejected

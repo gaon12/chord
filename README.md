@@ -158,6 +158,9 @@ fallback behavior, and editing workflow.
 Factual answers follow shared verification rules: say when something is
 unknown, label assumptions, correct false premises, and never invent sources
 or completed checks. These rules apply independently of Nova's character.
+Questions from gaon12's verified Discord account automatically receive more
+reviewable evidence, assumptions, and verification details when useful. There
+is no extra command to enable this; see [account preference](docs/PERSONA.md#automatic-detail-for-gaon12).
 
 Conversations are kept per channel **in memory only** - restarting the bot
 clears them, and nothing is persisted.

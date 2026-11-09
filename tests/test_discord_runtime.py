@@ -14,7 +14,7 @@ async def test_same_channel_waits_but_other_channels_can_continue():
     started, release = asyncio.Event(), asyncio.Event()
 
     class BlockingEngine(StubEngine):
-        async def reply(self, text, history):
+        async def reply(self, text, history, *, system_prompt=None):
             self.calls.append((text, history))
             if text.endswith("first"):
                 started.set()

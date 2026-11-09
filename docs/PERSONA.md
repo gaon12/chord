@@ -13,6 +13,7 @@ answer.
 | `persona.md` | Editable character, voice, response style, and dialogue examples |
 | `src/chord/persona.py` | Compact fallback persona, file loading, fixed operating rules, and tool-routing rules |
 | `src/chord/answer_policy.py` | Shared truthfulness, evidence, uncertainty, and correction rules |
+| `src/chord/account_preferences.py` | Automatic answer-detail preference for gaon12's verified Discord user ID |
 | `src/chord/bot.py` | Combines the loaded prompt with the current tool index before each turn |
 | `src/chord/tool_catalog.py` | Adds schema-selection instructions when tools load on demand |
 | `src/chord/config.py` | Initial `SYSTEM_PROMPT` setting used before Discord's per-turn prompt assembly |
@@ -62,6 +63,31 @@ and summarization preserve source claims without pretending to verify them.
 These instructions improve the expected behavior; they do not prove that
 every generated answer is correct. Important claims still need evidence and
 appropriate checks.
+
+## Automatic detail for gaon12
+
+Messages from gaon12's verified Discord user ID receive additional guidance
+to make answers easier to review: a clear conclusion, supporting evidence,
+necessary assumptions, unresolved points, and useful verification steps.
+Technical answers identify relevant versions and edge cases when evidence
+supports them, and distinguish tests actually run from checks merely suggested.
+
+This is automatic. There is no new command, toggle, or announcement in the
+reply. Simple questions stay brief, and the bot does not address the requester
+as a developer. Everyone receives the same truthfulness and uncertainty rules;
+anyone can still ask for a detailed explanation.
+
+The preference is bound to a permanent Discord user ID in
+`account_preferences.py`, not a display name, username string, or claim in a
+message. A nickname change does not remove it, and another account using the
+name gaon12 does not acquire it. Application ownership alone does not select
+this account preference or grant any additional tool permission.
+
+The extra guidance applies only to the current request. Discord passes a
+complete system-prompt snapshot to the engine rather than modifying its shared
+default. It is not stored in channel history or inherited by the next user,
+and concurrent channels keep their own snapshots. The preference does not
+change the provider, reasoning setting, token budget, or access controls.
 
 ## Editing and reloading
 

@@ -122,7 +122,7 @@ def register_commands(bot: ChordBot) -> None:
         if not await require_owner(bot, interaction):
             return
         if action == "view":
-            prompt = bot._engine.system_prompt
+            prompt = bot._system_prompt()
             preview = prompt[:300] + ("..." if len(prompt) > 300 else "")
             await interaction.response.send_message(
                 f"Current persona:\n```\n{preview}\n```", ephemeral=True

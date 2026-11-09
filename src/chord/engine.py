@@ -57,12 +57,16 @@ class ChatEngine:
         self,
         user_text: str,
         history: list[dict],
+        *,
+        system_prompt: str | None = None,
     ) -> tuple[str, list[dict]]:
         """Generate an answer for one user message.
 
         Args:
             user_text: What the user just said.
             history: Previous messages for this channel (oldest first).
+            system_prompt: Optional prompt snapshot for this turn only. It
+                never changes the shared engine's default prompt.
 
         Returns:
             ``(answer_text, new_messages)`` where ``new_messages`` holds
@@ -70,7 +74,7 @@ class ChatEngine:
             user message, intermediate tool traffic and the answer).
         """
         catalog = ToolCatalog(self._registry, self._on_demand_tools)
-        prompt = self.system_prompt
+        prompt = self.system_prompt if system_prompt is None else system_prompt
         if self._on_demand_tools:
             prompt += "\n\n" + SELECTION_RULE
         messages: list[dict] = [
