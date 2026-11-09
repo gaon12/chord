@@ -97,6 +97,11 @@ CI runs the same gates on Ubuntu, Windows and macOS via
 
 ## Discord state and permissions
 
+Character text and prompt assembly are described in [Persona guide](PERSONA.md).
+When changing the shipped character, update both `persona.md` and the compact
+`DEFAULT_PERSONA` fallback in `src/chord/persona.py`. Keep factual and tool
+behavior independent of the character's tone.
+
 Each channel processes one complete turn at a time, including history updates
 and compaction. Different channels can proceed independently. `/reset` uses
 the same boundary so a pending reply cannot restore cleared history.

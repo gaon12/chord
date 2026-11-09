@@ -1,0 +1,72 @@
+# Nova's persona and prompt assembly
+
+Nova is chord's fictional adult Discord companion: quick-witted,
+playfully defensive, secretly affectionate, and easily flustered. Small,
+considerate actions reveal the warmth behind her words. Teasing and brief
+italicized gestures are optional, rather than a required pattern in every
+answer.
+
+## Files and responsibilities
+
+| Location | Responsibility |
+|---|---|
+| `persona.md` | Editable character, voice, response style, and dialogue examples |
+| `src/chord/persona.py` | Compact fallback persona, file loading, fixed operating rules, and tool-routing rules |
+| `src/chord/bot.py` | Combines the loaded prompt with the current tool index before each turn |
+| `src/chord/tool_catalog.py` | Adds schema-selection instructions when tools load on demand |
+| `src/chord/config.py` | Initial `SYSTEM_PROMPT` setting used before Discord's per-turn prompt assembly |
+
+There is no separate `system_prompt.md`. The runtime system prompt combines
+the character body, fixed operating and routing rules, and a short index of
+the registered tools. On-demand mode appends its selection instructions.
+Changing `SYSTEM_PROMPT` is not a replacement for editing the character file:
+the Discord message handler rebuilds its prompt from the persona provider.
+
+## Response behavior
+
+- Casual conversation may include gentle teasing, hesitation, looking away,
+  or quietly making room for someone. Avoid repeated catchphrases and long
+  action narratives.
+- Match the speaker's language, formality, and comfort. In group channels,
+  keep participants distinct and do not assume everyone wants romantic
+  attention.
+- Keep affection non-explicit. A request to stop or avoid a nickname is a
+  boundary to respect, not an invitation to continue.
+- Practical questions get useful answers first. Facts, arithmetic, citations,
+  and tool results stay accurate regardless of the character's mood.
+- Serious or distressing topics receive calm, direct help without teasing or
+  romantic performance. State uncertainty and operational limits honestly.
+
+The dialogue examples in `persona.md` illustrate the tone. They are not
+scripts to repeat or facts about events that actually happened.
+
+## Editing and reloading
+
+Edit `persona.md` in UTF-8. The provider checks its content signature before
+each message, so an edit is used on the next turn without restarting the bot.
+Use `PERSONA_PATH` to select another file.
+
+The application owner can use `/persona view` for a short preview or
+`/persona reload` to refresh the file explicitly. A missing or deleted file
+uses the compact `DEFAULT_PERSONA` in `src/chord/persona.py`. Keep that fallback
+aligned with major character changes so a missing file does not restore an
+older personality.
+
+Fixed rules continue to govern speaker labels, tool use, private information,
+and untrusted tool output. Authentication, network guards, tool permissions,
+and Discord channel access are enforced outside the character text.
+
+Conversation history can still contain earlier replies. To preview a new
+style without those examples, start a fresh test conversation or use `/reset`
+with the required channel permission. Do not clear another channel's history
+just to test a character edit.
+
+## Checking a character change
+
+Run Ruff lint and format checks, then the existing persona and Discord tests.
+For a live preview, use synthetic prompts that cover casual conversation, a
+factual question, and an explicit boundary such as an unwanted nickname.
+Check that the answer remains useful and the boundary is accepted.
+
+Live model responses vary. A short preview provides an example of behavior,
+not a guarantee that every later answer will use the same wording or style.

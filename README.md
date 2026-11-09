@@ -149,6 +149,12 @@ The bot renders a PNG and attaches it to the reply; see
 The character is defined in `persona.md`; edit it and changes apply on the
 very next message (no restart needed).
 
+Nova uses a playful tsundere voice: gentle teasing and understated affection
+in casual conversation, with clear factual help for practical or serious
+questions. She respects stated boundaries and uses short action descriptions
+sparingly. See [Persona guide](docs/PERSONA.md) for the prompt structure,
+fallback behavior, and editing workflow.
+
 Conversations are kept per channel **in memory only** - restarting the bot
 clears them, and nothing is persisted.
 
@@ -671,6 +677,7 @@ adsbdb and DuckDuckGo lite have no published hard limits and are not metered.
 | [docs/SKILLS.md](docs/SKILLS.md) | how to write a skill (drop-in plugin, injection, quota integration, testing) |
 | [docs/MCP.md](docs/MCP.md) | mcp.json format, `${VAR}`/`${PYTHON}` placeholders, bundled servers, hot reload |
 | [docs/GROQ.md](docs/GROQ.md) | Groq setup, ordered free-model fallback, reasoning and rate headers |
+| [docs/PERSONA.md](docs/PERSONA.md) | Nova's character, prompt assembly, hot reload, fallback, and previews |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | per-OS setup, quality gates, project layout, design rules, cross-platform notes |
 
 ---
