@@ -40,9 +40,9 @@ REASONING_EFFORT_BY_LEVEL: dict[str, str | None] = {
 #: build the /reasoning choices so code and command never drift apart.
 REASONING_LEVELS: tuple[str, ...] = tuple(REASONING_EFFORT_BY_LEVEL)
 
-#: How much provider-side content filtering to ask for. "off" only means
-#: anything where the provider actually exposes a threshold (today: the
-#: Gemini API); it never disables the model's own training.
+#: Legacy preference retained for existing environment files. chord does not
+#: add a content-moderation service, and this value cannot override model or
+#: provider policies. See llm_options.build_extra_body.
 SafetyFilters = Literal["default", "off"]
 
 #: Standard logging levels, accepted in any casing.
@@ -98,11 +98,9 @@ class Settings(BaseSettings):
     #: fall back transparently (see chord.llm.LLMService).
     reasoning_level: ReasoningLevel = "none"
 
-    #: Provider-side content filtering. Set LLM_SAFETY_FILTERS=off when
-    #: the provider's own filter - not the model - is refusing things it
-    #: shouldn't. Only the Gemini API exposes such a threshold; see
-    #: chord.llm_options.build_extra_body for what it does elsewhere (nothing).
-    llm_safety_filters: SafetyFilters = "default"
+    #: No application moderation is enabled by default. The legacy "off"
+    #: value does not claim to disable a provider's built-in behavior.
+    llm_safety_filters: SafetyFilters = "off"
 
     #: Raw JSON object merged into every chat request's ``extra_body``,
     #: for provider extras this project has no setting of its own. The

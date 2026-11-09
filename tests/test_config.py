@@ -238,8 +238,8 @@ def test_unknown_log_level_is_rejected():
 # -- Provider extras ------------------------------------------------------------------
 
 
-def test_safety_filters_default_to_the_providers_own_setting():
-    assert _minimal_settings().llm_safety_filters == "default"
+def test_application_filter_preference_defaults_to_off():
+    assert _minimal_settings().llm_safety_filters == "off"
 
 
 def test_safety_filters_accept_sloppy_casing():

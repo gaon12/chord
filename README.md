@@ -428,36 +428,24 @@ question answerable. If the upload is rejected (too large, missing
 "Attach Files" permission), the bot re-sends the text alone rather than
 losing the answer with the image.
 
-### When the bot refuses something harmless
+### Response restrictions and provider behavior
 
-Three different things can produce a refusal, and only one of them has a
-switch:
+chord does not add a content-moderation model, keyword blacklist, or response
+censor. The shipped persona and built-in fallback answer sensitive topics
+neutrally, without blanket topic bans, political exclusions, mandatory
+professional-referral text, or scripted refusal phrases.
 
-1. **`persona.md`** - the Boundaries section. This is the usual culprit
-   and the first place to look: a broadly worded rule ("refuses anything
-   security-related, even framed as a game") makes the model decline
-   whole topics. Edit it, and the next message picks the change up.
-2. **The model's own training.** No API parameter reaches this. A model
-   that was trained to decline something declines it; changing
-   `OPENAI_MODEL` is the only real lever.
-3. **The provider's content filter** - a separate classifier in front of
-   the model. There is no knob for this over the OpenAI-compatible wire
-   format. `LLM_SAFETY_FILTERS=off` exists and logs where refusals
-   really come from, but sends nothing: Google's compat endpoint
-   rejects `safety_settings` outright (`Unknown name "safety_settings"
-   at 'extra_body.google'`, on both `gemma-4-31b-it` and
-   `gemini-2.5-flash`), while `thinking_config` in the same object is
-   accepted - so the nesting is right and the field is simply not
-   there. Use `LLM_EXTRA_BODY` if your provider accepts something.
+`LLM_SAFETY_FILTERS=off` is the default compatibility preference. It does not
+send a hidden filter-disable parameter: Groq's documented Chat API exposes
+no general switch that changes a model's training or turns off all provider
+policies. Those policies may still affect an answer. See the official
+[Groq API reference](https://console.groq.com/docs/api-reference).
 
-**In practice: edit `persona.md`.** Of the three, it is the one that is
-both the usual cause and the one you control.
-
-For provider extras chord has no setting for, `LLM_EXTRA_BODY` takes a
-raw JSON object that is merged into every request (deeply, and it wins
-over `LLM_SAFETY_FILTERS`). Malformed JSON fails at startup, not on the
-first message, and a provider that rejects the payload costs one 400 -
-after that the bot drops the extras and keeps answering.
+Edit `persona.md` to customize the response style; changes load on the next
+message. Authentication, tool permissions, private-network protection, and
+Discord age-restricted channel checks are separate access controls and stay
+enforced. `LLM_EXTRA_BODY` remains available for documented provider options;
+unsupported or reserved fields are not a reliable filter override.
 
 ---
 

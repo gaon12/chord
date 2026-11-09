@@ -319,16 +319,12 @@ async def test_no_extra_body_is_sent_by_default():
     assert "extra_body" not in fake.chat.completions.calls[0]
 
 
-def test_safety_off_sends_nothing_because_nothing_accepts_it(caplog):
-    """Google's compat endpoint rejects safety_settings outright, and it
-    was the only provider this ever targeted - so the shortcut emits no
-    payload rather than one guaranteed 400 per process."""
-    with caplog.at_level("WARNING"):
+def test_safety_off_does_not_invent_a_provider_override(caplog):
+    with caplog.at_level("INFO"):
         body = build_extra_body(_gemini_settings(llm_safety_filters="off"))
-
     assert body == {}
-    assert "no effect" in caplog.text
-    assert "persona.md" in caplog.text
+    assert "No application content moderation" in caplog.text
+    assert "does not override provider or model policies" in caplog.text
 
 
 def test_the_documented_payload_is_still_available_to_anyone_who_wants_it():
@@ -339,12 +335,11 @@ def test_the_documented_payload_is_still_available_to_anyone_who_wants_it():
     assert {entry["threshold"] for entry in settings_sent} == {"BLOCK_NONE"}
 
 
-def test_safety_off_warns_on_any_provider(caplog):
-    with caplog.at_level("WARNING"):
+def test_filter_preference_does_not_claim_to_disable_provider_policies(caplog):
+    with caplog.at_level("INFO"):
         body = build_extra_body(_settings().model_copy(update={"llm_safety_filters": "off"}))
-
     assert body == {}
-    assert "no effect" in caplog.text
+    assert "does not override provider or model policies" in caplog.text
 
 
 async def test_the_escape_hatch_still_reaches_the_request():

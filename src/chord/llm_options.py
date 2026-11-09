@@ -157,30 +157,16 @@ def merge_extra_body(base: dict[str, Any], override: dict[str, Any]) -> dict[str
 
 
 def build_extra_body(settings: Settings) -> dict[str, Any]:
-    """Provider extras to send with every request, from settings.
+    """Return explicitly configured extras without inventing safety overrides.
 
-    ``LLM_SAFETY_FILTERS=off`` produces nothing. It used to emit the
-    payload Google documents, and that payload is rejected: the
-    OpenAI-compatible endpoint answers
-
-        Unknown name "safety_settings" at 'extra_body.google'
-
-    for gemma-4-31b-it and gemini-2.5-flash alike, while
-    ``thinking_config`` in the same object is accepted - so the nesting
-    is right and the field simply is not there. Sending it bought one
-    guaranteed 400 per process and no change in behaviour.
-
-    The knob stays because the *question* is real and the answer may
-    change; what it does now is say where refusals actually come from.
-    ``LLM_EXTRA_BODY`` remains the way to send whatever a provider does
-    accept.
+    There is no application content-moderation call in this request path.
+    LLM_SAFETY_FILTERS is kept for configuration compatibility, but a local
+    preference cannot change a model's training or undocumented server policy.
+    Unsupported filter fields must not cause a 400 before every answer.
     """
     if settings.llm_safety_filters == "off":
-        logger.warning(
-            "LLM_SAFETY_FILTERS=off has no effect: no OpenAI-compatible "
-            "endpoint chord can reach exposes a content-filter threshold "
-            "(Google's rejects safety_settings outright). Refusals come "
-            "from the model's own training and from the Boundaries "
-            "section of persona.md - persona.md is the one you can edit."
+        logger.info(
+            "No application content moderation is enabled. "
+            "LLM_SAFETY_FILTERS=off does not override provider or model policies."
         )
     return merge_extra_body({}, settings.extra_body)

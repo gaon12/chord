@@ -138,3 +138,17 @@ Provider behavior was checked against the official documentation:
 - [Rate limits and response headers](https://console.groq.com/docs/rate-limits)
 - [OpenAI compatibility](https://console.groq.com/docs/openai)
 - [API error codes](https://console.groq.com/docs/errors)
+
+
+## Application moderation and provider policies
+
+The default `LLM_SAFETY_FILTERS=off` value is a compatibility preference.
+chord does not add a separate moderation call, keyword blacklist, or response
+censor. Its shipped and fallback personas contain no topic blacklist or
+scripted refusal catchphrase.
+
+Groq's documented Chat API has no general "disable all safety" parameter.
+The code therefore sends no invented safety override. A model's own training
+and provider-enforced policies may still affect responses. This setting does
+not disable authentication, tool authorization, private-network guards, or
+Discord age-restricted channel checks.
