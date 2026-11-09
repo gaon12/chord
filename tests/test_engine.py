@@ -210,7 +210,8 @@ async def test_tool_error_text_reaches_the_model():
 
     second = llm.requests[1]["messages"]
     assert "Error while running 'flaky'" in second[-1]["content"]
-    assert "nope" in second[-1]["content"]
+    assert "nope" not in second[-1]["content"]
+    assert "the tool failed" in second[-1]["content"]
 
 
 async def test_tool_loop_limit_returns_fallback():

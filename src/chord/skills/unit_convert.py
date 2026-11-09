@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from chord.skills._errors import SkillError
 from chord.skills.base import Skill
 
 #: Conversion factors relative to each category's base unit.
@@ -213,5 +214,5 @@ class ConvertUnitsSkill(Skill):
         return f"{format_value(float(value))} {from_c} = {format_value(result)} {to_c}"
 
 
-class SkillInputError(ValueError):
+class SkillInputError(SkillError, ValueError):
     """Bad user input; the registry renders it as readable text."""

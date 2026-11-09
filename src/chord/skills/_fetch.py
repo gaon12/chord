@@ -18,23 +18,22 @@ So the rules here are about *where* a request may go, not about parsing:
   URL that 302s to ``http://10.0.0.1/`` would otherwise walk straight
   past the check at the front door.
 
-This is not airtight - a name that passes the check and then resolves
-differently when httpx connects (DNS rebinding) still gets through. It
-raises the cost of the attack from "paste a link" to "run a DNS server",
-which for a chat bot is the right place to stop.
+Connections also use a public-only network backend, which checks DNS at
+socket creation and connects to a checked IP. Redirects get the same checks.
+Environment proxies are disabled for these untrusted destinations.
 """
 
 from __future__ import annotations
 
-import ipaddress
 import logging
 import re
-import socket
+import socket  # noqa: F401 - shared resolver patched by offline tests
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 import httpx
 
+from chord.network import PublicTransport, public_addresses
 from chord.skills._http import DEFAULT_HEADERS, SkillHTTPError
 
 logger = logging.getLogger(__name__)
@@ -114,28 +113,9 @@ def normalize_url(raw: str) -> str:
 def is_public_address(host: str) -> bool:
     """Whether every address ``host`` resolves to is on the public net."""
     try:
-        infos = socket.getaddrinfo(host, None)
-    except socket.gaierror:
+        public_addresses(host)
+    except (OSError, ValueError):
         return False
-
-    addresses = {info[4][0] for info in infos}
-    if not addresses:
-        return False
-
-    for address in addresses:
-        try:
-            parsed = ipaddress.ip_address(address)
-        except ValueError:
-            return False
-        if (
-            parsed.is_private
-            or parsed.is_loopback
-            or parsed.is_link_local  # 169.254.0.0/16 - cloud metadata lives here
-            or parsed.is_reserved
-            or parsed.is_multicast
-            or parsed.is_unspecified
-        ):
-            return False
     return True
 
 
@@ -144,6 +124,8 @@ def assert_fetchable(url: str) -> None:
     parts = urlsplit(url)
     if parts.scheme not in ALLOWED_SCHEMES:
         raise SkillHTTPError(f"Only http and https links can be opened, not '{parts.scheme}:'.")
+    if parts.username is not None or parts.password is not None:
+        raise SkillHTTPError("Links containing credentials cannot be opened.")
     if not parts.hostname:
         raise SkillHTTPError(f"'{url}' has no host to connect to.")
     if not is_public_address(parts.hostname):
@@ -224,11 +206,13 @@ async def fetch_bytes(
     same guard whether it remembers to ask for it or not.
     """
     current = normalize_url(url)
-    headers = {**DEFAULT_HEADERS, "Accept": accept_header}
+    headers = {**DEFAULT_HEADERS, "Accept": accept_header, "Accept-Encoding": "identity"}
 
     async with httpx.AsyncClient(
         timeout=FETCH_TIMEOUT,
         follow_redirects=False,
+        trust_env=False,
+        transport=PublicTransport(),
         headers=headers,
     ) as client:
         for _hop in range(MAX_REDIRECTS + 1):
@@ -240,6 +224,13 @@ async def fetch_bytes(
                         continue
                     if response.status_code >= 400:
                         raise SkillHTTPError(f"{current} answered HTTP {response.status_code}.")
+
+                    # Refuse compressed bodies before HTTPX decompresses them.
+                    # A small compressed response can otherwise allocate much
+                    # more memory than the download limit permits.
+                    encoding = response.headers.get("content-encoding", "identity")
+                    if encoding.strip().lower() not in ("", "identity"):
+                        raise SkillHTTPError("Compressed responses cannot be opened safely.")
 
                     content_type = response.headers.get("content-type", "")
                     if not _type_matches(content_type, accept):
@@ -278,7 +269,7 @@ async def _read_capped(response: httpx.Response, max_bytes: int) -> tuple[bytes,
     """Read a response body, stopping at ``max_bytes``."""
     chunks: list[bytes] = []
     size = 0
-    async for chunk in response.aiter_bytes():
+    async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
         chunks.append(chunk)
         size += len(chunk)
         if size >= max_bytes:

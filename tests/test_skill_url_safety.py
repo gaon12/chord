@@ -109,7 +109,7 @@ async def test_safe_when_all_sources_clear():
     result = await CheckUrlSafetySkill(_settings()).run(url="https://example.com")
 
     assert "VERDICT: SAFE" in result
-    assert "cleared by lrl.kr, Cloudflare 1.1.1.2" in result
+    assert "cleared by lrl.kr" in result
 
 
 @respx.mock
@@ -131,7 +131,7 @@ async def test_missing_lrl_key_skips_source_without_failing():
         settings = _settings(lrl_api_key="")
         result = await CheckUrlSafetySkill(settings).run(url="https://ok.test")
 
-    assert "VERDICT: SAFE" in result
+    assert "VERDICT: UNKNOWN" in result
     assert "lrl.kr (skipped) - no LRL_API_KEY" in result
 
 
@@ -185,3 +185,22 @@ def test_merge_prefers_unsafe_then_safe_then_unknown():
 
     overall, reasons = merge_verdicts([safe, unsafe, unknown])
     assert overall == "UNSAFE" and reasons == ["a: bad"]
+
+
+@pytest.mark.parametrize("payload", [{"Status": 3}, _doh_normal(), {"Status": 0, "Answer": []}])
+@respx.mock
+async def test_dns_does_not_claim_url_safety_from_resolution_alone(payload):
+    respx.get(CLOUDFLARE_DOH_URL).respond(json=payload)
+    verdict = await check_cloudflare_dns("https://example.com")
+    assert verdict.status == "unknown"
+
+
+@respx.mock
+async def test_dns_failure_does_not_discard_an_independent_verdict():
+    import httpx
+
+    respx.get(LRL_CHECK_URL).respond(status_code=201, json=_lrl_malware())
+    respx.get(CLOUDFLARE_DOH_URL).mock(side_effect=httpx.ConnectError("down"))
+    result = await CheckUrlSafetySkill(_settings()).run(url="https://example.com")
+    assert "VERDICT: UNSAFE" in result
+    assert "DNS check unavailable" in result

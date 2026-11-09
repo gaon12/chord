@@ -131,4 +131,19 @@ async def test_execute_skill_exception_becomes_error_text():
     result = await registry.execute("boom", "{}")
 
     assert result.startswith("Error while running 'boom'")
-    assert "kaboom" in result
+    assert "kaboom" not in result
+
+
+@pytest.mark.parametrize("arguments", ['{"text": 12}', "[]", "null", '{"text": null}'])
+async def test_invalid_input_is_rejected_before_execution(arguments):
+    assert (await _registry().execute("echo", arguments)).startswith("Error:")
+
+
+async def test_private_arguments_and_exception_messages_are_not_logged(caplog):
+    registry = _registry()
+    registry.register(BoomSkill())
+    with caplog.at_level("INFO"):
+        await registry.execute("echo", {"text": "private-message-123"})
+        await registry.execute("boom", {})
+    assert "private-message-123" not in caplog.text
+    assert "kaboom" not in caplog.text

@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import ClassVar
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from chord.skills._errors import SkillError
 from chord.skills.base import Skill
 
 #: Sane default for the expected audience of this bot.
@@ -52,7 +53,7 @@ def resolve_timezone(name: str) -> ZoneInfo:
         ) from exc
 
 
-class SkillValueError(ValueError):
+class SkillValueError(SkillError, ValueError):
     """Raised for bad user input; converted to text by the registry."""
 
 

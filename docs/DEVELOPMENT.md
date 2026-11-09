@@ -58,8 +58,7 @@ src/chord/
     _http/_geo      shared request + geocoding helpers
     _quota          usage counters / limits / usage.json persistence
     <topic>.py      one module per skill (auto-discovered)
-tools/
-  sqlite_mcp_server.py   in-repo SQLite MCP stdio server
+src/chord/sqlite_server.py   optional, bounded read-only SQLite MCP server
 docs/                SKILLS.md / MCP.md / this file
 tests/               mirror of src, fully mocked
 ```

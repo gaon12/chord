@@ -20,6 +20,8 @@ from typing import Any
 
 import httpx
 
+from chord.skills._errors import SkillError
+
 logger = logging.getLogger(__name__)
 
 #: Generous timeout: some public APIs are slow at peak times.
@@ -29,7 +31,7 @@ TIMEOUT_SECONDS = 15.0
 DEFAULT_HEADERS = {"User-Agent": "chord-discord-bot/0.1 (+https://github.com/)"}
 
 
-class SkillHTTPError(RuntimeError):
+class SkillHTTPError(SkillError, RuntimeError):
     """Raised when an upstream API call fails; text goes back to the LLM."""
 
 

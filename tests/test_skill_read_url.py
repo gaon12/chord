@@ -7,6 +7,8 @@ here resolve to whatever FAKE_DNS says and nothing touches a resolver.
 
 from __future__ import annotations
 
+import gzip
+
 import httpx
 import pytest
 import respx
@@ -346,3 +348,18 @@ async def test_a_read_page_arrives_fenced():
     assert result.rstrip().endswith(UNTRUSTED_CLOSE)
     # The header - our own text - stays outside the fence.
     assert result.index("URL: ") < result.index(UNTRUSTED_OPEN)
+
+
+async def test_links_with_embedded_credentials_are_refused():
+    with pytest.raises(SkillHTTPError, match="credentials"):
+        await fetch_page("https://user:secret@example.com/private")
+
+
+@respx.mock
+async def test_compressed_response_is_refused_before_decompression():
+    respx.get(PAGE_URL).respond(
+        content=gzip.compress(b"<p>large compressed page</p>"),
+        headers={"content-type": "text/html", "content-encoding": "gzip"},
+    )
+    with pytest.raises(SkillHTTPError, match="Compressed"):
+        await fetch_page(PAGE_URL)

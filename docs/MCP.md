@@ -14,12 +14,6 @@ every server on startup, adapts each tool into the shared registry as
     "keenable": {
       "url": "https://api.keenable.ai/mcp",
       "headers": { "X-API-Key": "${KEENABLE_API_KEY}" }
-    },
-
-    // Local stdio server: any executable plus args.
-    "sqlite": {
-      "command": "${PYTHON}",
-      "args": ["tools/sqlite_mcp_server.py", "--db-path", "chord.db"]
     }
   }
 }
@@ -48,7 +42,7 @@ Rules:
 | `keenable` | live web search + page fetch | needs `KEENABLE_API_KEY` |
 | `korean-law` | 12 legal tools over 법제처 APIs (statutes, precedents, citation verification) | public server is rate-shared; append `?oc=<key>` from open.law.go.kr for an own credential |
 | `playwright` | browser automation: navigate / snapshot / click / screenshot | **not enabled by default** - see below |
-| `sqlite` | persistent memory for the LLM (`db_tables` / `db_query` / `db_execute` on `chord.db`) | runs inside the project venv, zero extra installs |
+| `sqlite` | read-only queries against a dedicated, shareable database | opt-in; see below |
 | `rhwp` | HWP/HWPX reading, searching, form filling, PDF/text/SVG export | **not enabled by default** - see below |
 
 ### playwright (opt-in)
@@ -133,3 +127,27 @@ its tools to register:
 The startup log says when a filter is in effect ("connected with 6 of 40
 tool(s) (filtered)"), and `/tools` shows what each server costs per
 message once it is connected.
+
+
+### sqlite (opt-in, read-only)
+
+The default sample does not expose a database. To enable read-only access,
+prepare a separate `notes.db` containing only data everyone using the bot may
+read. Never use `chord.db`, which contains reminders from other channels.
+
+```json
+"sqlite": {
+  "command": "${PYTHON}",
+  "args": ["-m", "chord.sqlite_server", "--db-path", "notes.db"]
+}
+```
+
+This packaged server offers `db_tables` and `db_query`, with no write tool.
+SQLite enforces read-only access and denies ATTACH, PRAGMA, and file/extension
+functions. Queries have execution and result limits. The database must exist.
+Remove legacy entries calling `tools/sqlite_mcp_server.py`; that local script
+is not part of the package and may expose unrestricted writes.
+
+Only configure trusted MCP servers and use allowlists for the tools needed.
+A tool can access files, networks, or accounts with its server's permissions;
+web-content fences are not an authorization boundary.

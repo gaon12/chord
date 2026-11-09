@@ -16,8 +16,11 @@ import json
 import logging
 from typing import Any
 
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError
 from openai.types.chat import ChatCompletionToolParam
 
+from chord.skills._errors import SkillError
 from chord.skills.base import Skill
 
 logger = logging.getLogger(__name__)
@@ -104,21 +107,28 @@ class SkillRegistry:
             return f"Error: unknown tool '{name}'."
 
         try:
+            if isinstance(raw_arguments, str) and len(raw_arguments) > 65_536:
+                return f"Error: arguments for '{name}' are too large."
             arguments = _parse_arguments(raw_arguments)
-        except json.JSONDecodeError:
+        except (ValueError, RecursionError):
             return f"Error: arguments for '{name}' are not valid JSON."
 
         try:
-            logger.info("Running skill %s(%s)", name, arguments)
+            # Log names only: arguments can contain private messages, locations,
+            # tracking numbers, or signed links. They do not belong in logs.
+            Draft202012Validator(skill.parameters).validate(arguments)
+            logger.info("Running skill %s", name)
             return await skill.run(**arguments)
-        except TypeError as exc:
-            # Wrong argument names/types against the declared JSON Schema.
-            logger.warning("Bad arguments for skill %s: %s", name, exc)
-            return f"Error: bad arguments for '{name}': {exc}"
-        except Exception as exc:  # noqa: BLE001 - reported to the LLM below
-            logger.exception("Skill %s failed", name)
-            message = str(exc) or type(exc).__name__
-            return f"Error while running '{name}': {message}"
+        except (TypeError, ValidationError):
+            return f"Error: bad arguments for '{name}'. Check the tool schema."
+        except SkillError as exc:
+            # These messages are written by our HTTP helpers for the user.
+            return f"Error while running '{name}': {exc}"
+        except Exception as exc:  # noqa: BLE001 - a failed tool must not crash chat
+            # Exception text may contain credentials or database contents. Keep
+            # it out of both the model's context and application logs.
+            logger.error("Skill %s failed (%s)", name, type(exc).__name__)
+            return f"Error while running '{name}': the tool failed. Please try again."
 
 
 def _parse_arguments(raw_arguments: str | dict) -> dict[str, Any]:
@@ -129,4 +139,6 @@ def _parse_arguments(raw_arguments: str | dict) -> dict[str, Any]:
         parsed = json.loads(raw_arguments)
         if isinstance(parsed, dict):
             return parsed
-    return {}
+    if raw_arguments is None or (isinstance(raw_arguments, str) and not raw_arguments.strip()):
+        return {}
+    raise ValueError("Tool arguments must be a JSON object.")

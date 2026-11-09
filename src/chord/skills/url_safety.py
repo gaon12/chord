@@ -119,13 +119,19 @@ async def check_cloudflare_dns(url: str) -> SourceVerdict:
     )
 
     answers = data.get("Answer") or []
-    blocked = any(str(answer.get("data")) == "0.0.0.0" for answer in answers)
-    # Blocked domains may also come back with Status 3 (NXDOMAIN).
-    if blocked or data.get("Status") == 3:
+    blocked = any(
+        answer.get("type") in (1, 28) and str(answer.get("data")) in ("0.0.0.0", "::")
+        for answer in answers
+    )
+    if blocked:
         return SourceVerdict("Cloudflare 1.1.1.2", "unsafe", f"{domain} is blocked as malicious")
-    if answers:
-        return SourceVerdict("Cloudflare 1.1.1.2", "safe", f"{domain} resolves normally")
-    return SourceVerdict("Cloudflare 1.1.1.2", "unknown", "no DNS answer")
+    # NXDOMAIN means that a name does not exist. A normal DNS answer only
+    # proves that it resolves. Neither answer establishes that a URL is safe.
+    if data.get("Status") == 3:
+        return SourceVerdict("Cloudflare 1.1.1.2", "unknown", f"{domain} does not resolve")
+    return SourceVerdict(
+        "Cloudflare 1.1.1.2", "unknown", "not flagged by DNS; URL safety is unverified"
+    )
 
 
 async def scan_cloudflare_radar(api_key: str, account_id: str, url: str) -> SourceVerdict:
@@ -209,7 +215,10 @@ class CheckUrlSafetySkill(Skill):
             verdicts.append(SourceVerdict("lrl.kr", "skipped", "no LRL_API_KEY"))
 
         # 2. Cloudflare 1.1.1.2 DNS blocklist (key-less).
-        verdicts.append(await check_cloudflare_dns(url))
+        try:
+            verdicts.append(await check_cloudflare_dns(url))
+        except SkillHTTPError:
+            verdicts.append(SourceVerdict("Cloudflare 1.1.1.2", "unknown", "DNS check unavailable"))
 
         # 3. Optional live scan via Cloudflare Radar.
         if self._settings.cloudflare_api_key and self._settings.cloudflare_account_id:

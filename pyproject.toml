@@ -24,6 +24,10 @@ dependencies = [
     "pydantic-settings>=2.3",
     # Async HTTP client used by the built-in data skills.
     "httpx>=0.27",
+    # Public-only socket connections for untrusted URLs.
+    "httpcore>=1.0,<2",
+    # Validate tool inputs before a skill can perform side effects.
+    "jsonschema>=4.23",
     # Model Context Protocol client SDK (external tool servers).
     "mcp>=1.2",
     # Chart rendering for the price-history skill. Pillow rather than

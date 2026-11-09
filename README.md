@@ -45,8 +45,7 @@ Everything works **without any API keys** except the URL shortener; optional
 keys unlock the official/premium providers listed above.
 
 External **MCP** servers add more tools on top - see [MCP tools](#mcp-tools).
-The shipped `mcp.json` wires up Keenable (search), Korean law, a SQLite
-bridge, and [daiso-mcp](https://github.com/hmmhmmhm/daiso-mcp) for Daiso
+The shipped `mcp.json` wires up Keenable (search), Korean law, and [daiso-mcp](https://github.com/hmmhmmhm/daiso-mcp) for Daiso
 product and store-inventory lookups.
 
 ---
@@ -360,9 +359,9 @@ address comes from whoever is chatting, so before each request — and
 again after each redirect — the host must resolve to a public address.
 `localhost`, `10.x`, `192.168.x`, `169.254.169.254` (cloud credentials)
 and non-http schemes are refused. That is a guard, not a guarantee: a
-name that resolves differently between the check and the connection
-still gets through, which raises the bar from "paste a link" to "run a
-DNS server".
+public-only socket backend resolves and validates the destination again
+at connection time, then connects to a checked numeric IP while retaining
+the original TLS hostname. Environment proxies cannot bypass the checks.
 
 Pages are capped at 2 MB downloaded and ~5000 characters returned (the
 model may ask for up to 15000). Everything returned lands in the channel
@@ -566,20 +565,14 @@ never live in the config file:
     },
     "korean-law": {
       "url": "https://mcp.gomdori.app/law"
-    },
-    "sqlite": {
-      "command": ".venv/Scripts/python.exe",
-      "args": ["tools/sqlite_mcp_server.py", "--db-path", "chord.db"]
     }
   }
 }
 ```
 
-These three expose 15 tools, bringing a request to 5 428 prompt tokens
-including the built-in skills - about three messages per minute on the
-Gemini free tier. Every server you add is charged on every message, so
-weigh new ones against your provider's input-token rate limit - see
-[Troubleshooting](#troubleshooting).
+Use `/tools` to inspect the connected catalog and its estimated prompt cost.
+Every enabled server adds schemas to each request, so enable only the tools
+you need and compare their cost with your provider's rate limits.
 
 With the `keenable` server configured (`KEENABLE_API_KEY=...` in `.env`) the
 bot gains **live web search** (`keenable_search_web_pages`,
@@ -592,9 +585,11 @@ The other bundled servers:
   law text, citation verification (환각 방지), 조례 정비 레이더 등. Public
   server is quota-shared; append `?oc=<your key>` from
   <https://open.law.go.kr> for an own credential.
-* **sqlite** (`tools/sqlite_mcp_server.py`, in-repo) - `db_tables` /
-  `db_query` / `db_execute` against `chord.db`, giving the LLM a small
-  persistent memory it can create tables in.
+* **sqlite** is opt-in and read-only. Use `python -m chord.sqlite_server`
+  with a dedicated, existing database containing only shareable data.
+  See [docs/MCP.md](docs/MCP.md#sqlite-opt-in-read-only). The old local
+  `tools/sqlite_mcp_server.py` is not shipped or supported; remove that
+  entry from existing `mcp.json` files. Never expose `chord.db` to chat tools.
 Not enabled by default:
 
 * **playwright** (`@playwright/mcp`) - browser automation: navigate,
@@ -627,8 +622,9 @@ unavailable cannot flip the answer:
 
 1. **lrl.kr v5** - Google Safe Browsing cache (`LRL_API_KEY`; the key must
    have the URL-check service enabled at <https://api.lrl.kr>).
-2. **Cloudflare 1.1.1.2 for Families** - key-less DNS blocklist; malicious
-   domains resolve to `0.0.0.0`.
+2. **Cloudflare 1.1.1.2 for Families** - key-less DNS blocklist. A block
+   address is an unsafe signal. Ordinary DNS answers and NXDOMAIN are
+   inconclusive; resolving a hostname does not prove that a URL is safe.
 3. **Cloudflare Radar URL Scanner** (optional) - a real live scan when
    `CLOUDFLARE_API_KEY` + `CLOUDFLARE_ACCOUNT_ID` are set.
 
