@@ -41,11 +41,13 @@ tools when a question needs real-world data.
 | QR codes | `make_qr`, `read_qr` | qrcode + zxing-cpp (local) | - |
 | Reminders | `set_reminder`, `list_reminders` | pure Python (SQLite) | - |
 
-Everything works **without any API keys** except the URL shortener; optional
-keys unlock the official/premium providers listed above.
+Most data skills have key-less fallbacks. The bot still needs Discord and
+LLM provider credentials; URL shortening requires its own key. Optional
+provider keys unlock the official/premium sources listed above.
 
 External **MCP** servers add more tools on top - see [MCP tools](#mcp-tools).
-The shipped `mcp.json` wires up Keenable (search), Korean law, and [daiso-mcp](https://github.com/hmmhmmhm/daiso-mcp) for Daiso
+The shipped `mcp.json.sample` wires up Keenable (search), Korean law, and
+[daiso-mcp](https://github.com/hmmhmmhm/daiso-mcp) for Daiso
 product and store-inventory lookups.
 
 ---
@@ -98,6 +100,18 @@ MCP_CONFIG_PATH=mcp.json                    # external MCP servers
 ```
 
 See `.env.sample` for the full list with signup links.
+
+### Groq free-model setup
+
+Use `LLM_PROVIDER=groq` and `GROQ_API_KEY=...` instead of an OpenAI key.
+With `GROQ_FREE_TIER=true` (default), model order is Qwen 3.8 27B,
+GPT-OSS 120B, then GPT-OSS 20B. A rate-limited model gives way to the next
+available one; `/usage` shows observed RPD and TPM headers.
+
+`auto` omits the reasoning parameter. `none` disables thinking on Qwen and
+uses `low` on GPT-OSS, which cannot disable reasoning. See
+[Groq setup](docs/GROQ.md) for exact model IDs, reasoning mappings, cooldowns,
+output limits, and account billing details.
 
 ### 3. Run
 
@@ -667,6 +681,7 @@ adsbdb and DuckDuckGo lite have no published hard limits and are not metered.
 |---|---|
 | [docs/SKILLS.md](docs/SKILLS.md) | how to write a skill (drop-in plugin, injection, quota integration, testing) |
 | [docs/MCP.md](docs/MCP.md) | mcp.json format, `${VAR}`/`${PYTHON}` placeholders, bundled servers, hot reload |
+| [docs/GROQ.md](docs/GROQ.md) | Groq setup, ordered free-model fallback, reasoning and rate headers |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | per-OS setup, quality gates, project layout, design rules, cross-platform notes |
 
 ---

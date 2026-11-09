@@ -81,7 +81,7 @@ def _construct(skill_class, services: dict):
     return skill_class(**kwargs)
 
 
-def create_default_registry(settings: Settings) -> SkillRegistry:
+def create_default_registry(settings: Settings, llm: LLMService | None = None) -> SkillRegistry:
     """Discover every built-in skill and return a ready registry.
 
     Discovery rules keep additions trivial - drop a module with a
@@ -98,7 +98,7 @@ def create_default_registry(settings: Settings) -> SkillRegistry:
     to start is no bot at all.
     """
     registry = SkillRegistry()
-    llm = LLMService(settings)
+    llm = llm if llm is not None else LLMService(settings)
     # A skill may ask for the registry it lives in - list_capabilities
     # does, so that its answer includes MCP tools registered later.
     services = {"settings": settings, "llm": llm, "registry": registry}

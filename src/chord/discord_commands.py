@@ -59,7 +59,13 @@ def register_commands(bot: ChordBot) -> None:
     @bot.tree.command(name="usage", description="Show remaining API quotas per provider")
     async def usage_cmd(interaction: discord.Interaction) -> None:
         store = get_quota_store(bot._settings.quota_store_path)
-        await interaction.response.send_message(render_usage(store), ephemeral=True)
+        text = render_usage(store)
+        llm = getattr(bot._engine, "llm", None)
+        if llm is not None and hasattr(llm, "describe_usage"):
+            details = llm.describe_usage()
+            if details:
+                text += "\n\n" + details
+        await send_private(interaction, text)
 
     @bot.tree.command(
         name="reminders",
@@ -177,6 +183,10 @@ def describe_reasoning(bot: ChordBot) -> str:
     llm = getattr(bot._engine, "llm", None)
     if llm is not None and current != "auto" and not llm.reasoning_enabled:
         lines.append("⚠️ This model rejected the reasoning parameter, so the setting has no effect.")
+    if llm is not None and hasattr(llm, "describe_reasoning"):
+        details = llm.describe_reasoning()
+        if details:
+            lines.append(details)
     lines.append("Change it with `/reasoning <level>` — " + ", ".join(REASONING_LEVELS))
     return "\n".join(lines)
 

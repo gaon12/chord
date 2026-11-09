@@ -82,6 +82,16 @@ class ChatEngine:
             completion = await self._llm.complete(messages, self._registry.to_openai_tools())
             log_token_usage(completion)
             message = completion.choices[0].message
+            if completion.choices[0].finish_reason == "length":
+                # A truncated tool call may have incomplete arguments. Never
+                # execute it or store it as a valid assistant/tool exchange.
+                note = (
+                    "The model reached its output limit. Try a shorter request "
+                    "or ask the operator to increase the completion token limit."
+                )
+                answer = f"{message.content}\n\n{note}" if message.content else note
+                messages.append({"role": "assistant", "content": answer})
+                return answer, messages[turn_start:]
             messages.append(_serialize_message(message))
 
             if not message.tool_calls:

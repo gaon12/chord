@@ -214,6 +214,17 @@ async def test_tool_error_text_reaches_the_model():
     assert "the tool failed" in second[-1]["content"]
 
 
+async def test_output_limit_does_not_execute_an_incomplete_tool_request():
+    response = _tool_call_completion(("c1", "add", '{"a": 1, "b": 2}'))
+    response["choices"][0]["finish_reason"] = "length"
+    llm = FakeLLM(response)
+    answer, messages = await _engine(llm).reply("add", [])
+    assert "output limit" in answer
+    assert len(llm.requests) == 1
+    assert [message["role"] for message in messages] == ["user", "assistant"]
+    assert "tool_calls" not in messages[-1]
+
+
 async def test_tool_loop_limit_returns_fallback():
     # Every completion asks for another tool call -> loop must stop.
     endless = _tool_call_completion(("c1", "add", '{"a": 0, "b": 0}'))

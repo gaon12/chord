@@ -14,13 +14,12 @@ from openai import BadRequestError, RateLimitError
 from openai.types.chat import ChatCompletion
 
 from chord.config import Settings
-from chord.llm import (
+from chord.llm import LLMService, create_client
+from chord.llm_options import (
     DEFAULT_RATE_LIMIT_WAIT,
     GEMINI_HARM_CATEGORIES,
     MAX_RATE_LIMIT_WAIT,
-    LLMService,
     build_extra_body,
-    create_client,
     gemini_safety_settings,
     is_reasoning_rejection,
     merge_extra_body,

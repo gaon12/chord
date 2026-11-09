@@ -13,7 +13,8 @@ python -m venv .venv
 ```
 
 Copy `.env.sample` to `.env` and fill in `DISCORD_TOKEN` +
-`OPENAI_API_KEY`. Everything else is optional.
+`OPENAI_API_KEY`, or use `LLM_PROVIDER=groq` and `GROQ_API_KEY` instead.
+See [Groq setup](GROQ.md) for model fallback and reasoning settings.
 
 ## Run
 
@@ -54,7 +55,10 @@ src/chord/
   channel_turns.py  per-channel turn serialization
   engine.py         one turn = LLM <-> tools loop (max 6 rounds)
   conversation.py   per-channel history (RAM only)
-  llm.py            AsyncOpenAI facade (base_url configurable)
+  llm.py            shared completion facade and client lifecycle
+  llm_options.py    optional request fields for compatible providers
+  groq_provider.py  ordered free-model fallback and reasoning mapping
+  groq_limits.py    rate headers, cooldowns, and usage descriptions
   mcp_client.py     mcp.json -> sessions -> Skill adapters (+ hot reload)
   skills/
     base.py         Skill -> OpenAI tool definition

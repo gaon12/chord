@@ -13,8 +13,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
-from pydantic import Field, ValidationError, field_validator
+from pydantic import Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 #: Default base URL points at the real OpenAI API, but any OpenAI-compatible
@@ -55,17 +56,30 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",  # unknown keys in .env are ignored, not errors
+        hide_input_in_errors=True,
     )
 
     # -- Required -----------------------------------------------------------
 
     #: Discord bot token from the developer portal (Bot -> Reset Token).
-    discord_token: str
+    discord_token: str = Field(repr=False)
 
     #: API key for the OpenAI-compatible provider.
-    openai_api_key: str
+    openai_api_key: str = Field(default="", repr=False)
 
     # -- LLM ----------------------------------------------------------------
+
+    #: Groq uses its official endpoint and supports ordered free-model fallback.
+    #: The default preserves existing OpenAI-compatible configurations.
+    llm_provider: Literal["openai", "groq"] = "openai"
+
+    groq_api_key: str = Field(default="", repr=False)
+    groq_free_tier: bool = True
+    groq_model: str = "qwen/qwen3.8-27b"
+
+    #: This includes reasoning tokens. Increase it for longer reasoning, while
+    #: allowing room for the prompt in the organization's token rate limit.
+    groq_max_completion_tokens: int = Field(default=1024, ge=1, le=16_384)
 
     #: Root URL of an OpenAI-compatible chat API.
     openai_base_url: str = DEFAULT_OPENAI_BASE_URL
@@ -83,7 +97,7 @@ class Settings(BaseSettings):
     #: Provider-side content filtering. Set LLM_SAFETY_FILTERS=off when
     #: the provider's own filter - not the model - is refusing things it
     #: shouldn't. Only the Gemini API exposes such a threshold; see
-    #: chord.llm.build_extra_body for what it does elsewhere (nothing).
+    #: chord.llm_options.build_extra_body for what it does elsewhere (nothing).
     llm_safety_filters: SafetyFilters = "default"
 
     #: Raw JSON object merged into every chat request's ``extra_body``,
@@ -238,6 +252,50 @@ class Settings(BaseSettings):
         """``LLM_EXTRA_BODY`` parsed; ``{}`` when unset."""
         return json.loads(self.llm_extra_body) if self.llm_extra_body.strip() else {}
 
+    @model_validator(mode="after")
+    def _validate_groq_extras(self) -> Settings:
+        """Keep free-model routing and output limits outside the escape hatch."""
+        reserved = {
+            "model",
+            "messages",
+            "tools",
+            "tool_choice",
+            "stream",
+            "reasoning_effort",
+            "reasoning_format",
+            "max_tokens",
+            "max_completion_tokens",
+        }
+        if self.use_groq and reserved.intersection(self.extra_body):
+            raise ValueError(
+                "LLM_EXTRA_BODY cannot override Groq routing, reasoning, or output fields."
+            )
+        if self.use_groq and not self.groq_model.strip():
+            raise ValueError("GROQ_MODEL must not be empty.")
+        return self
+
+    @property
+    def use_groq(self) -> bool:
+        """Recognize explicit Groq setup and existing compatible-URL setups."""
+        return (
+            self.llm_provider == "groq" or urlsplit(self.openai_base_url).hostname == "api.groq.com"
+        )
+
+    @property
+    def llm_api_key(self) -> str:
+        if self.use_groq:
+            if self.llm_provider == "groq":
+                # Selecting Groq must not forward an unrelated OpenAI key.
+                return self.groq_api_key
+            return self.groq_api_key or self.openai_api_key
+        return self.openai_api_key
+
+    @property
+    def llm_base_url(self) -> str:
+        if self.use_groq:
+            return "https://api.groq.com/openai/v1"
+        return self.openai_base_url
+
     @property
     def reasoning_effort(self) -> str | None:
         """The ``reasoning_effort`` value to send, or None to send none."""
@@ -286,8 +344,8 @@ def _validate_api_keys(settings: Settings) -> None:
             "Discord bot token from https://discord.com/developers/applications",
         ),
         (
-            "OPENAI_API_KEY",
-            settings.openai_api_key,
+            "GROQ_API_KEY" if settings.use_groq else "OPENAI_API_KEY",
+            settings.llm_api_key,
             "API key from your LLM provider. Any format works:\n"
             "  OpenAI: sk-... | Gemini: AIzaSy... | OpenRouter: sk-or-...\n"
             "Just make sure OPENAI_BASE_URL matches the provider.",

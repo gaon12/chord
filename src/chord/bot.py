@@ -204,6 +204,9 @@ class ChordBot(discord.Client):
         self._mcp_reload_loop.cancel()
         await self._mcp.stop()
         await close_shared_client()
+        llm = getattr(self._engine, "llm", None)
+        if llm is not None and hasattr(llm, "aclose"):
+            await llm.aclose()
         await super().close()
 
     # -- Events -----------------------------------------------------------------
@@ -520,16 +523,17 @@ def _discord_files(files: list[Attachment] | None) -> list[discord.File]:
 
 def build_bot(settings: Settings) -> ChordBot:
     """Create a fully wired bot instance from settings."""
-    registry = create_default_registry(settings)
+    llm = LLMService(settings)
+    registry = create_default_registry(settings, llm=llm)
     engine = ChatEngine(
-        llm=LLMService(settings),
+        llm=llm,
         registry=registry,
         system_prompt=settings.system_prompt,
     )
     logger.info(
         "Bot ready: %d skill(s), model=%s, base_url=%s",
         len(registry),
-        settings.openai_model,
-        settings.openai_base_url,
+        llm.model,
+        settings.llm_base_url,
     )
     return ChordBot(settings=settings, engine=engine, registry=registry)
