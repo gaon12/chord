@@ -54,6 +54,7 @@ src/chord/
   message_splitter.py  message limits and balanced code fences
   channel_turns.py  per-channel turn serialization
   engine.py         one turn = LLM <-> tools loop (max 6 rounds)
+  tool_catalog.py   per-turn schema selection and offered-tool checks
   conversation.py   per-channel history (RAM only)
   llm.py            shared completion facade and client lifecycle
   llm_options.py    optional request fields for compatible providers
@@ -111,3 +112,17 @@ reload the persona or change the global reasoning setting, including in DMs.
 Other users may view the reasoning setting. Resetting a guild conversation
 requires Manage Messages permission or application ownership; DM resets affect
 only that DM conversation. These checks are enforced by command callbacks.
+
+
+## Tool schemas and parallel calls
+
+`TOOL_CATALOG_MODE=auto` offers schemas on demand for Groq free mode; other
+setups keep the full catalog. Selection is local to each turn. A model cannot
+execute a guessed tool that was absent from the current request, even if it
+selects that tool in the same completion.
+
+A skill may set `parallel_safe = True` only after review confirms that calls
+are independent reads. Adjacent safe calls run with a concurrency limit of
+four. Every other call is an ordering barrier. MCP tools remain sequential,
+regardless of remote read-only hints. Error results retain their positions
+without cancelling successful sibling lookups.

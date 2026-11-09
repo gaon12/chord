@@ -106,7 +106,8 @@ See `.env.sample` for the full list with signup links.
 Use `LLM_PROVIDER=groq` and `GROQ_API_KEY=...` instead of an OpenAI key.
 With `GROQ_FREE_TIER=true` (default), model order is Qwen 3.8 27B,
 GPT-OSS 120B, then GPT-OSS 20B. A rate-limited model gives way to the next
-available one; `/usage` shows observed RPD and TPM headers.
+available one; `/usage` shows observed RPD and TPM headers. Tool schemas
+load on demand in free mode, so greetings do not carry the full catalog.
 
 `auto` omits the reasoning parameter. `none` disables thinking on Qwen and
 uses `low` on GPT-OSS, which cannot disable reasoning. See

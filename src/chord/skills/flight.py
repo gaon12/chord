@@ -164,6 +164,7 @@ async def fetch_aviationstack(api_key: str, callsign: str, quota=None) -> str:
 
 class FlightSkill(Skill):
     name = "get_flight_info"
+    parallel_safe = True
     description = (
         "Look up live flights. With a callsign (e.g. 'KAL801', 'UAL2'): "
         "position, altitude, speed and route of that flight. "

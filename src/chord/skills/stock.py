@@ -31,6 +31,7 @@ def format_price(value: float | None, currency: str) -> str:
 
 class StockPriceSkill(Skill):
     name = "get_stock_price"
+    parallel_safe = True
     description = (
         "Get the latest stock price and daily change for a ticker symbol. "
         "US examples: AAPL, MSFT, TSLA. Korean stocks need a suffix: "

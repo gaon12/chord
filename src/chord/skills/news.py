@@ -58,6 +58,7 @@ def _clean_title(title: str) -> str:
 
 class NewsSkill(Skill):
     name = "get_news"
+    parallel_safe = True
     description = (
         "Get the latest Korean news headlines. Sections: politics "
         "(default), economy, society, culture, sports. With a query: "

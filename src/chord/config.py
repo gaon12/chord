@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     #: allowing room for the prompt in the organization's token rate limit.
     groq_max_completion_tokens: int = Field(default=1024, ge=1, le=16_384)
 
+    #: Auto loads schemas on demand for Groq free mode and offers the full
+    #: catalog for other providers. Explicit modes are useful for comparisons.
+    tool_catalog_mode: Literal["auto", "full", "on_demand"] = "auto"
+
     #: Root URL of an OpenAI-compatible chat API.
     openai_base_url: str = DEFAULT_OPENAI_BASE_URL
 
@@ -295,6 +299,12 @@ class Settings(BaseSettings):
         if self.use_groq:
             return "https://api.groq.com/openai/v1"
         return self.openai_base_url
+
+    @property
+    def on_demand_tools(self) -> bool:
+        if self.tool_catalog_mode == "auto":
+            return self.use_groq and self.groq_free_tier
+        return self.tool_catalog_mode == "on_demand"
 
     @property
     def reasoning_effort(self) -> str | None:

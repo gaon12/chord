@@ -79,6 +79,7 @@ def parse_datetime(text: str, zone: ZoneInfo) -> datetime:
 
 class CurrentDatetimeSkill(Skill):
     name = "get_current_datetime"
+    parallel_safe = True
     description = (
         "Get today's date and current time for a timezone, with the "
         "UTC offset. Defaults to Asia/Seoul."
@@ -111,6 +112,7 @@ class CurrentDatetimeSkill(Skill):
 
 class ConvertTimezoneSkill(Skill):
     name = "convert_timezone"
+    parallel_safe = True
     description = (
         "Convert a specific time from one timezone to another, e.g. "
         "'2026-08-23 14:00' from 'Asia/Seoul' to 'America/New_York'."

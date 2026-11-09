@@ -130,7 +130,8 @@ class ChordBot(discord.Client):
         registered = await self._mcp.start(self._settings, self._registry.register)
         if registered:
             logger.info("Registered %d MCP tool(s).", registered)
-        warn_if_tool_catalog_is_large(self._registry.to_openai_tools())
+        if not self._settings.on_demand_tools:
+            warn_if_tool_catalog_is_large(self._registry.to_openai_tools())
         await self.tree.sync()
         self._mcp_reload_loop.start()
         self._reminder_loop.start()
@@ -529,6 +530,7 @@ def build_bot(settings: Settings) -> ChordBot:
         llm=llm,
         registry=registry,
         system_prompt=settings.system_prompt,
+        on_demand_tools=settings.on_demand_tools,
     )
     logger.info(
         "Bot ready: %d skill(s), model=%s, base_url=%s",

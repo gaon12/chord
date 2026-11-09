@@ -71,6 +71,7 @@ def render_capabilities(
     *,
     with_summaries: bool = True,
     with_cost: bool = False,
+    on_demand: bool = False,
 ) -> str:
     """Human-readable listing of everything registered.
 
@@ -86,7 +87,13 @@ def render_capabilities(
     costs = group_costs(registry) if with_cost else {}
     header = f"{len(registry)} tool(s) available."
     if with_cost:
-        header = f"{len(registry)} tool(s), ~{sum(costs.values()):,} prompt tokens per message."
+        if on_demand:
+            header = (
+                f"{len(registry)} tool(s), ~{sum(costs.values()):,} tokens for all schemas. "
+                "Schemas are loaded on demand; only selected tools are sent."
+            )
+        else:
+            header = f"{len(registry)} tool(s), ~{sum(costs.values()):,} prompt tokens per message."
 
     lines = [header]
     for group, entries in groups.items():

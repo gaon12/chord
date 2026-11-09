@@ -12,13 +12,14 @@ calling:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
-from openai.types.chat import ChatCompletionToolParam
+from openai.types.chat import ChatCompletionMessageToolCall, ChatCompletionToolParam
 
 from chord.skills._errors import SkillError
 from chord.skills.base import Skill
@@ -87,6 +88,36 @@ class SkillRegistry:
         return [skill.to_openai_tool() for skill in self._skills.values()]
 
     # -- Execution -------------------------------------------------------------
+
+    async def execute_calls(self, calls: list[ChatCompletionMessageToolCall]) -> list[str]:
+        """Run adjacent safe lookups together, keeping writes as ordering barriers.
+
+        Results stay in the model's original call order. A state-changing call
+        finishes before any later call starts, so create-then-read sequences
+        retain their meaning. At most four safe requests run concurrently.
+        """
+        results: list[str] = []
+        pending: list[ChatCompletionMessageToolCall] = []
+        semaphore = asyncio.Semaphore(4)
+
+        async def run(call) -> str:
+            async with semaphore:
+                return await self.execute(call.function.name, call.function.arguments)
+
+        async def flush() -> None:
+            if pending:
+                results.extend(await asyncio.gather(*(run(call) for call in pending)))
+                pending.clear()
+
+        for call in calls:
+            skill = self._skills.get(call.function.name)
+            if skill is not None and skill.parallel_safe:
+                pending.append(call)
+            else:
+                await flush()
+                results.append(await run(call))
+        await flush()
+        return results
 
     async def execute(self, name: str, raw_arguments: str | dict) -> str:
         """Run one skill call coming from the LLM.

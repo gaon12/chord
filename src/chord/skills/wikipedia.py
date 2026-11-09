@@ -42,6 +42,7 @@ def clean_extract(text: str, limit: int = MAX_EXTRACT_CHARS) -> str:
 
 class WikiSummarySkill(Skill):
     name = "get_wiki_summary"
+    parallel_safe = True
     description = (
         "Look up a topic on Korean Wikipedia and return a short encyclopedia-style summary."
     )

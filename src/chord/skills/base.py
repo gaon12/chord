@@ -34,6 +34,10 @@ class Skill(ABC):
     #: One or two sentences telling the model what the tool does.
     description: str = ""
 
+    #: Opt in only for independent lookups with no user-visible state changes.
+    #: Unknown plugins and MCP tools remain sequential unless reviewed.
+    parallel_safe: bool = False
+
     #: JSON Schema describing accepted arguments.
     parameters: ClassVar[dict[str, Any]] = {
         "type": "object",

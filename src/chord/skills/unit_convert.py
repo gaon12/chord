@@ -180,6 +180,7 @@ def format_value(value: float) -> str:
 
 class ConvertUnitsSkill(Skill):
     name = "convert_units"
+    parallel_safe = True
     description = (
         "Convert a value between units: length, mass, temperature, "
         "volume, area (incl. pyeong), speed and data size."

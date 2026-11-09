@@ -53,7 +53,12 @@ def register_commands(bot: ChordBot) -> None:
         # Names only: with MCP servers loaded the descriptions run
         # well past Discord's 2000-character ceiling, and this
         # command is read to find out what exists.
-        listing = render_capabilities(bot._registry, with_summaries=False, with_cost=True)
+        listing = render_capabilities(
+            bot._registry,
+            with_summaries=False,
+            with_cost=True,
+            on_demand=bot._settings.on_demand_tools,
+        )
         await send_private(interaction, listing)
 
     @bot.tree.command(name="usage", description="Show remaining API quotas per provider")

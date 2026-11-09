@@ -103,8 +103,27 @@ avoid races inside this process.
 
 If a 429 has neither a useful reset header nor `retry-after`, the model gets
 a sixty-second cooldown. The code does not guess whether that hidden quota
-was RPM or TPD. Keep unnecessary MCP servers disabled: sending every schema
-still spends prompt tokens on every tool-enabled request.
+was RPM or TPD.
+
+## On-demand tool schemas
+
+`TOOL_CATALOG_MODE=auto` loads tool schemas on demand in Groq free mode.
+The first request offers only `chord_select_tools` and the short tool-name
+index in the system prompt. A greeting therefore does not carry the full
+schema catalog. When a lookup is needed, the model selects exact tool names,
+receives their schemas on the next request, and then calls those tools.
+Selections last for one turn and are isolated between channels.
+
+This saves schema tokens but adds a selection round-trip for lookups.
+`TOOL_CATALOG_MODE=full` restores the full catalog on each request;
+`on_demand` enables selection for any provider. `/tools` distinguishes full
+catalog size from the schemas actually offered on demand. The short index
+and conversation history still use tokens.
+
+Reviewed independent lookups run with at most four concurrent calls. Writes,
+reminders, unknown plugins, and MCP tools stay sequential. A state-changing
+call is an ordering barrier between lookup groups, and results retain the
+model's original call order.
 
 ## Request configuration and sources
 

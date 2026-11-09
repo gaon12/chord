@@ -89,3 +89,12 @@ async def test_my_skill():
     respx.get("https://api.example.com").respond(json={"ok": True})
     assert "done" in await MySkill().run()
 ```
+
+
+## Parallel-safe lookups
+
+Skills run sequentially unless they explicitly set `parallel_safe = True`.
+Use this only for independent, read-only lookups. Do not opt in a tool that
+creates reminders, changes records, or relies on the result of another call.
+Adjacent opted-in calls run at most four at a time. Other calls remain
+ordering barriers, and result messages keep the original call order.

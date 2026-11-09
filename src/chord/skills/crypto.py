@@ -61,6 +61,7 @@ def format_volume(value: float | None) -> str:
 
 class CryptoPriceSkill(Skill):
     name = "get_crypto_price"
+    parallel_safe = True
     description = (
         "Get current KRW prices for cryptocurrencies traded on Upbit "
         "(BTC, ETH, XRP, SOL, DOGE ...): price, change and 24h volume."

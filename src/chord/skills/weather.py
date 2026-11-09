@@ -133,6 +133,7 @@ def in_korea(latitude: float, longitude: float) -> bool:
 
 class WeatherSkill(Skill):
     name = "get_weather"
+    parallel_safe = True
     description = (
         "Get the current weather for a city: temperature, feels-like, "
         "humidity, wind and sky condition."

@@ -44,6 +44,7 @@ def _clamp_chars(max_chars: int | None) -> int:
 
 class ReadUrlSkill(Skill):
     name = "read_url"
+    parallel_safe = True
     description = (
         "Open a web page and return its readable text, to summarize or "
         "quote. Use whenever someone pastes a link and asks what it says "

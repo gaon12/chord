@@ -22,6 +22,7 @@ from openai.types.chat import (
 
 from chord.llm import LLMService
 from chord.skills.registry import SkillRegistry
+from chord.tool_catalog import SELECTION_RULE, ToolCatalog
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +39,14 @@ class ChatEngine:
         registry: SkillRegistry,
         system_prompt: str,
         max_tool_rounds: int = DEFAULT_MAX_TOOL_ROUNDS,
+        on_demand_tools: bool = False,
     ) -> None:
         self._llm = llm
         self._registry = registry
         # Public and mutable so callers can swap the persona at runtime.
         self.system_prompt = system_prompt
         self._max_tool_rounds = max_tool_rounds
+        self._on_demand_tools = on_demand_tools
 
     @property
     def llm(self) -> LLMService:
@@ -66,8 +69,12 @@ class ChatEngine:
             everything that should be remembered from this turn (the
             user message, intermediate tool traffic and the answer).
         """
+        catalog = ToolCatalog(self._registry, self._on_demand_tools)
+        prompt = self.system_prompt
+        if self._on_demand_tools:
+            prompt += "\n\n" + SELECTION_RULE
         messages: list[dict] = [
-            {"role": "system", "content": self.system_prompt},
+            {"role": "system", "content": prompt},
             *history,
             {"role": "user", "content": user_text},
         ]
@@ -79,7 +86,7 @@ class ChatEngine:
         turn_start = len(messages) - 1
 
         for _round in range(self._max_tool_rounds):
-            completion = await self._llm.complete(messages, self._registry.to_openai_tools())
+            completion = await self._llm.complete(messages, catalog.definitions())
             log_token_usage(completion)
             message = completion.choices[0].message
             if completion.choices[0].finish_reason == "length":
@@ -100,8 +107,8 @@ class ChatEngine:
                 return content, messages[turn_start:]
 
             logger.info("Model requested %d tool call(s)", len(message.tool_calls))
-            for call in message.tool_calls:
-                result = await self._registry.execute(call.function.name, call.function.arguments)
+            results = await catalog.execute_calls(message.tool_calls)
+            for call, result in zip(message.tool_calls, results, strict=True):
                 messages.append(
                     {
                         "role": "tool",

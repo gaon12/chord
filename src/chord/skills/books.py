@@ -245,6 +245,7 @@ PROVIDER_LABELS = {
 
 class BookSearchSkill(Skill):
     name = "search_books"
+    parallel_safe = True
     description = (
         "Look up books by title, author, keyword or ISBN and return "
         "what the catalogues know: title, author, publisher, year, ISBN "

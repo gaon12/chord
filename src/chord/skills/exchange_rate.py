@@ -27,6 +27,7 @@ def format_amount(value: float) -> str:
 
 class ExchangeRateSkill(Skill):
     name = "get_exchange_rate"
+    parallel_safe = True
     description = (
         "Convert money between two currencies using the latest ECB "
         "reference exchange rates, e.g. USD to KRW."

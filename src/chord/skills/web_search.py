@@ -289,6 +289,7 @@ def format_results(query: str, provider: str, results: list[dict]) -> str:
 
 class WebSearchSkill(Skill):
     name = "web_search"
+    parallel_safe = True
     description = (
         "Search the web for current information (news, facts, docs, "
         "anything you are unsure about). Returns titles, links and short "

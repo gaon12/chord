@@ -114,6 +114,7 @@ def render_report(report: AirReport) -> str:
 
 class AirQualitySkill(Skill):
     name = "get_air_quality"
+    parallel_safe = True
     description = (
         "Get current air quality for a city: fine dust PM10, ultra-fine "
         "dust PM2.5 (in micrograms per cubic meter) and US AQI."
