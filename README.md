@@ -155,6 +155,10 @@ questions. She respects stated boundaries and uses short action descriptions
 sparingly. See [Persona guide](docs/PERSONA.md) for the prompt structure,
 fallback behavior, and editing workflow.
 
+Factual answers follow shared verification rules: say when something is
+unknown, label assumptions, correct false premises, and never invent sources
+or completed checks. These rules apply independently of Nova's character.
+
 Conversations are kept per channel **in memory only** - restarting the bot
 clears them, and nothing is persisted.
 

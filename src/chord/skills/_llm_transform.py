@@ -12,6 +12,7 @@ from typing import ClassVar
 
 from openai.types.chat import ChatCompletion
 
+from chord.answer_policy import accuracy_rules
 from chord.llm import LLMService
 from chord.skills._errors import SkillError
 from chord.skills.base import Skill
@@ -38,6 +39,7 @@ class LLMSkill(Skill):
         system = self.instruction
         if extra_instruction:
             system = f"{system} {extra_instruction}".strip()
+        system += "\n\n" + accuracy_rules()
 
         completion: ChatCompletion = await self._llm.complete(
             messages=[

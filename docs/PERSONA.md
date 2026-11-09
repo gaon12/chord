@@ -12,6 +12,7 @@ answer.
 |---|---|
 | `persona.md` | Editable character, voice, response style, and dialogue examples |
 | `src/chord/persona.py` | Compact fallback persona, file loading, fixed operating rules, and tool-routing rules |
+| `src/chord/answer_policy.py` | Shared truthfulness, evidence, uncertainty, and correction rules |
 | `src/chord/bot.py` | Combines the loaded prompt with the current tool index before each turn |
 | `src/chord/tool_catalog.py` | Adds schema-selection instructions when tools load on demand |
 | `src/chord/config.py` | Initial `SYSTEM_PROMPT` setting used before Discord's per-turn prompt assembly |
@@ -39,6 +40,28 @@ the Discord message handler rebuilds its prompt from the persona provider.
 
 The dialogue examples in `persona.md` illustrate the tone. They are not
 scripts to repeat or facts about events that actually happened.
+
+## Truthfulness and uncertainty
+
+Every persona receives the same fixed accuracy rules from `answer_policy.py`.
+These rules also apply to LLM-backed translation, summarization, and
+explanation tools. A character edit does not remove them.
+
+Answers must distinguish verified facts, source claims, assumptions, and
+inferences. When knowledge or evidence is missing, the bot should say that
+it does not know or cannot verify the claim. It must not fabricate citations,
+API fields, repository contents, tool results, or tests it did not run.
+Version-sensitive and current claims need verification using available tools
+and primary sources. A false premise should be corrected politely, including
+when the requester is the bot's owner.
+
+History summaries preserve uncertainty, corrections, and attribution so an
+earlier guess does not become a verified fact after compaction. Translation
+and summarization preserve source claims without pretending to verify them.
+
+These instructions improve the expected behavior; they do not prove that
+every generated answer is correct. Important claims still need evidence and
+appropriate checks.
 
 ## Editing and reloading
 
