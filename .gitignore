@@ -6,10 +6,18 @@
 
 # Local MCP server config may contain real endpoints/keys via ${VARS}.
 mcp.json
+mcp.json.*
+!mcp.json.sample
 
 # Persisted runtime state.
 usage.json
 chord.db
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+*.sqlite
+*.sqlite3
 
 # Downloaded chart font (Noto Sans KR), refetched on demand.
 .cache/

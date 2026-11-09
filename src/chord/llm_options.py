@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import math
 import re
 from typing import Any
 
@@ -77,12 +78,30 @@ def rate_limit_delay(error: Exception) -> float | None:
         raw = header.get("retry-after") or header.get("Retry-After")
         if raw:
             try:
-                return float(raw)
+                value = float(raw)
+                if math.isfinite(value) and value >= 0:
+                    return value
             except (TypeError, ValueError):
                 pass
 
     match = _RETRY_DELAY_RE.search(str(error))
-    return float(match.group(1)) if match else None
+    value = float(match.group(1)) if match else None
+    return value if value is not None and math.isfinite(value) else None
+
+
+def is_history_rejection(message: str) -> bool:
+    """Only clear history when the provider identifies an invalid tool exchange."""
+    lowered = message.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "tool_call_id",
+            "must be followed by",
+            "must be a response to",
+            "function_response.name",
+            "messages with role 'tool'",
+        )
+    )
 
 
 def is_reasoning_rejection(message: str) -> bool:

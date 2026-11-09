@@ -209,7 +209,7 @@ def load_server_specs(
     try:
         data = json.loads(config_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        logger.warning("Could not read MCP config %s: %s", config_path, exc)
+        logger.warning("Could not read MCP config %s: %s", config_path, type(exc).__name__)
         return {}
 
     merged_env = {**os.environ, **(env or {})}
@@ -318,7 +318,9 @@ class McpManager:
             try:
                 record = await self._launch(server_name, spec)
             except Exception as exc:  # noqa: BLE001 - one bad server != outage
-                logger.warning("MCP server %s failed to start (%s) - skipped.", server_name, exc)
+                logger.warning(
+                    "MCP server %s failed to start (%s) - skipped.", server_name, type(exc).__name__
+                )
                 continue
 
             session = record["session"]
@@ -405,7 +407,7 @@ class McpManager:
             if not ready.done():
                 ready.set_exception(exc)
             elif not isinstance(exc, asyncio.CancelledError):
-                logger.warning("MCP server %s crashed: %s", server_name, exc)
+                logger.warning("MCP server %s crashed: %s", server_name, type(exc).__name__)
 
     async def stop(self) -> None:
         """Signal every server task to shut down and wait for it."""

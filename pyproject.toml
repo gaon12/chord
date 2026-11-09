@@ -19,7 +19,7 @@ dependencies = [
     # Discord gateway/API client.
     "discord.py>=2.4",
     # Official OpenAI SDK. Works with any OpenAI-compatible server via base_url.
-    "openai>=1.40",
+    "openai>=1.68.2",
     # Typed settings loaded from environment variables / .env files.
     "pydantic-settings>=2.3",
     # Async HTTP client used by the built-in data skills.

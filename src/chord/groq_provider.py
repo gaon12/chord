@@ -50,6 +50,7 @@ class GroqProvider:
         self.max_tokens = max_tokens
         self.limits = {model: GroqLimits() for model in models}
         self._lock = asyncio.Lock()
+        self._unavailable: set[str] = set()
 
     def describe_usage(self) -> str:
         lines = ["Groq (last observed headers; shared organization quotas):"]
@@ -104,6 +105,7 @@ class GroqProvider:
                 if inspect.isawaitable(completion):
                     completion = await completion
                 self.model = model
+                self._unavailable.discard(model)
                 return completion
             except RateLimitError as exc:
                 limits.mark_rate_limited(exc.response.headers)
@@ -119,11 +121,14 @@ class GroqProvider:
                 if code not in {"model_not_found", "model_decommissioned"}:
                     raise
                 limits.retry_at = time.monotonic() + 300
+                self._unavailable.add(model)
                 logger.warning("Groq model %s is unavailable (%s).", model, code)
                 last_error = exc
 
         if last_error is not None:
             raise last_error
+        if all(model in self._unavailable for model in self.models):
+            raise RuntimeError("All configured Groq models are unavailable; check the model IDs.")
         # No network call is needed when all models are in a known cooldown.
         # Use the existing rate-limit error path in the Discord layer.
         response = httpx.Response(

@@ -26,11 +26,27 @@ def public_addresses(host: str) -> list[str]:
         raise ValueError("The hostname has no public address.")
     for address in addresses:
         parsed = ipaddress.ip_address(address)
-        # An IPv4-mapped IPv6 address must pass the IPv4 rules as well.
-        mapped = getattr(parsed, "ipv4_mapped", None)
-        if not parsed.is_global or (mapped is not None and not mapped.is_global):
+        if not _is_public(parsed):
             raise ValueError("The hostname is not a public address.")
     return addresses
+
+
+def _is_public(address) -> bool:
+    # is_global alone includes multicast and old IPv6 site-local addresses
+    # on supported Python versions. Explicitly exclude special destinations.
+    if (
+        not address.is_global
+        or address.is_multicast
+        or address.is_reserved
+        or address.is_unspecified
+        or getattr(address, "is_site_local", False)
+    ):
+        return False
+    embedded = [getattr(address, "ipv4_mapped", None), getattr(address, "sixtofour", None)]
+    teredo = getattr(address, "teredo", None)
+    if teredo is not None:
+        embedded.extend(teredo)
+    return all(_is_public(item) for item in embedded if item is not None)
 
 
 class PublicNetworkBackend(httpcore.AsyncNetworkBackend):

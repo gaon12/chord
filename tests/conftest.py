@@ -5,7 +5,7 @@ tests to a per-test JSON file, so quota counters never leak between
 tests and never touch a real ``usage.json`` in the repo root.
 
 DNS is stubbed for every test. The URL-fetching guard in
-chord.skills._fetch calls ``socket.getaddrinfo`` directly, which respx
+chord.network calls ``socket.getaddrinfo`` directly, which respx
 cannot intercept, so without this the suite would need a resolver - and
 worse, a test asserting "this address is refused" could pass merely
 because the name failed to resolve.
@@ -23,8 +23,8 @@ import socket
 
 import pytest
 
+from chord import network
 from chord.fonts import forget_resolved_font
-from chord.skills import _fetch
 from chord.skills._http import close_shared_client
 
 
@@ -64,7 +64,7 @@ def _fake_dns(monkeypatch):
             address = FAKE_DNS[host]
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, 0))]
 
-    monkeypatch.setattr(_fetch.socket, "getaddrinfo", getaddrinfo)
+    monkeypatch.setattr(network.socket, "getaddrinfo", getaddrinfo)
 
 
 @pytest.fixture(autouse=True)

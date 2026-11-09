@@ -126,3 +126,22 @@ are independent reads. Adjacent safe calls run with a concurrency limit of
 four. Every other call is an ordering barrier. MCP tools remain sequential,
 regardless of remote read-only hints. Error results retain their positions
 without cancelling successful sibling lookups.
+
+
+## Sensitive errors and network destinations
+
+Application error logs record operation names and exception types without
+private request text, signed URLs, or raw provider error bodies. Only errors
+that identify an invalid assistant/tool history exchange clear stored history;
+a bad model name or tool schema does not erase a valid conversation.
+
+Untrusted URL connections reject private, reserved, multicast, site-local,
+and private addresses embedded in IPv6 transition forms. DNS checks run off
+the event loop, and connections use checked numeric IPs while retaining the
+original TLS hostname and certificate verification. Regression tests cover
+both the destination socket and the HTTPS Host/SNI behavior.
+
+Runtime database files and their SQLite journals are ignored by Git. The
+legacy local SQLite MCP script is unsupported; remove it from existing
+configuration and enable the packaged read-only server only for a dedicated,
+shareable database. Existing reminder databases do not need a migration.

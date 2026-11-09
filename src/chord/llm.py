@@ -18,7 +18,7 @@ from openai import AsyncOpenAI, BadRequestError, RateLimitError
 from openai.types.chat import ChatCompletion, ChatCompletionToolParam
 
 from chord.config import Settings
-from chord.groq_provider import GROQ_FREE_MODELS, GroqProvider
+from chord.groq_provider import GROQ_FREE_MODELS, GroqProvider, groq_reasoning_effort
 from chord.llm_options import (
     DEFAULT_RATE_LIMIT_WAIT,
     MAX_RATE_LIMIT_WAIT,
@@ -89,6 +89,8 @@ class LLMService:
     @property
     def reasoning_enabled(self) -> bool:
         """Whether the next request will carry ``reasoning_effort``."""
+        if self._groq is not None:
+            return groq_reasoning_effort(self.model, self.reasoning_effort) is not None
         return self.reasoning_effort is not None and self._reasoning_supported
 
     @property
@@ -191,11 +193,10 @@ class LLMService:
             kwargs.pop("reasoning_effort")
             self._reasoning_supported = False
             logger.warning(
-                "Model %s rejected reasoning_effort=%s (%s); "
+                "Model %s rejected reasoning_effort=%s; "
                 "continuing without it for the rest of this run.",
                 self.model,
                 self.reasoning_effort,
-                error,
             )
             return True
 
@@ -203,10 +204,9 @@ class LLMService:
             kwargs.pop("extra_body")
             self._extra_body_supported = False
             logger.warning(
-                "Provider rejected the extra request body (%s); continuing "
+                "Provider rejected the extra request body; continuing "
                 "without it. Check LLM_SAFETY_FILTERS / LLM_EXTRA_BODY - "
                 "these fields are provider-specific.",
-                error,
             )
             return True
 

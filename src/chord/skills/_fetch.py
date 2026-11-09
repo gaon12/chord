@@ -25,9 +25,9 @@ Environment proxies are disabled for these untrusted destinations.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
-import socket  # noqa: F401 - shared resolver patched by offline tests
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -129,7 +129,7 @@ def assert_fetchable(url: str) -> None:
     if not parts.hostname:
         raise SkillHTTPError(f"'{url}' has no host to connect to.")
     if not is_public_address(parts.hostname):
-        logger.warning("Refusing to fetch %s: host is not a public address.", url)
+        logger.warning("Refusing a URL whose host is not public.")
         raise SkillHTTPError(f"'{parts.hostname}' is not a public address, so I will not open it.")
 
 
@@ -216,7 +216,12 @@ async def fetch_bytes(
         headers=headers,
     ) as client:
         for _hop in range(MAX_REDIRECTS + 1):
-            assert_fetchable(current)
+            try:
+                # DNS can block in the OS resolver. Keep that work off the
+                # event loop so one hostname cannot freeze every channel.
+                await asyncio.wait_for(asyncio.to_thread(assert_fetchable, current), FETCH_TIMEOUT)
+            except TimeoutError as exc:
+                raise SkillHTTPError("The public hostname lookup timed out.") from exc
             try:
                 async with client.stream("GET", current) as response:
                     if response.is_redirect:
@@ -240,7 +245,7 @@ async def fetch_bytes(
 
                     body, truncated = await _read_capped(response, max_bytes)
             except httpx.RequestError as exc:
-                logger.warning("Could not fetch %s: %s", current, exc)
+                logger.warning("Could not fetch a public URL (%s).", type(exc).__name__)
                 raise SkillHTTPError(f"Could not reach {current}.") from exc
 
             return FetchedBytes(

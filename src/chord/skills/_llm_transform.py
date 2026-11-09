@@ -13,6 +13,7 @@ from typing import ClassVar
 from openai.types.chat import ChatCompletion
 
 from chord.llm import LLMService
+from chord.skills._errors import SkillError
 from chord.skills.base import Skill
 
 
@@ -44,4 +45,9 @@ class LLMSkill(Skill):
                 {"role": "user", "content": text},
             ]
         )
+        if completion.choices[0].finish_reason == "length":
+            raise SkillError(
+                "The model reached its output limit before finishing this task. "
+                "Ask the operator to increase the completion token limit."
+            )
         return completion.choices[0].message.content or ""

@@ -6,7 +6,7 @@ import logging
 
 import pytest
 
-from chord.__main__ import NOISY_LOGGERS, apply_log_level
+from chord.__main__ import HTTP_LOGGERS, NOISY_LOGGERS, apply_log_level
 
 
 @pytest.fixture(autouse=True)
@@ -14,7 +14,8 @@ def _restore_levels():
     """Logging is global state; put every level back afterwards."""
     root = logging.getLogger()
     saved = [(root, root.level)] + [
-        (logging.getLogger(name), logging.getLogger(name).level) for name in NOISY_LOGGERS
+        (logging.getLogger(name), logging.getLogger(name).level)
+        for name in (*NOISY_LOGGERS, *HTTP_LOGGERS)
     ]
     yield
     for logger, level in saved:
@@ -42,3 +43,9 @@ def test_info_leaves_library_loggers_alone():
     apply_log_level("INFO")
 
     assert all(logging.getLogger(name).level == logging.NOTSET for name in NOISY_LOGGERS)
+
+
+@pytest.mark.parametrize("level", ["DEBUG", "INFO", "WARNING", "ERROR"])
+def test_http_and_sdk_logs_do_not_emit_private_urls_or_request_bodies(level):
+    apply_log_level(level)
+    assert all(not logging.getLogger(name).isEnabledFor(logging.INFO) for name in HTTP_LOGGERS)

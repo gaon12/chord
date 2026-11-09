@@ -34,7 +34,7 @@ HELP_TEXT = (
 #: where the choice is actually made.
 REASONING_LEVEL_HELP: dict[str, str] = {
     "auto": "provider default (parameter not sent)",
-    "none": "answer immediately — fastest, best for chat",
+    "none": "lowest supported thinking effort — fastest",
     "light": "a little thinking on hard questions",
     "medium": "balanced",
     "heavy": "think it through — slowest",
@@ -187,7 +187,9 @@ def describe_reasoning(bot: ChordBot) -> str:
 
     llm = getattr(bot._engine, "llm", None)
     if llm is not None and current != "auto" and not llm.reasoning_enabled:
-        lines.append("⚠️ This model rejected the reasoning parameter, so the setting has no effect.")
+        lines.append(
+            "⚠️ This model is not using the reasoning parameter, so the setting has no effect."
+        )
     if llm is not None and hasattr(llm, "describe_reasoning"):
         details = llm.describe_reasoning()
         if details:

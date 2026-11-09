@@ -50,6 +50,7 @@ from chord.discord_text import (
 )
 from chord.engine import ChatEngine
 from chord.llm import LLMService
+from chord.llm_options import is_history_rejection
 from chord.mcp_client import McpManager
 from chord.message_splitter import split_message as split_message
 from chord.persona import PersonaProvider, with_tool_index
@@ -157,7 +158,7 @@ class ChordBot(discord.Client):
             if changed:
                 logger.info("MCP tools refreshed from mcp.json.")
         except Exception:  # noqa: BLE001
-            logger.exception("MCP reload failed; keeping previous servers.")
+            logger.error("MCP reload failed; keeping previous servers.")
 
     @_mcp_reload_loop.before_loop
     async def _wait_gateway_mcp(self) -> None:
@@ -193,7 +194,7 @@ class ChordBot(discord.Client):
                 self._reminders.mark_done(reminder.id)
                 count += 1
             except Exception:  # noqa: BLE001
-                logger.exception(
+                logger.error(
                     "Could not deliver reminder #%s to channel %s",
                     reminder.id,
                     reminder.channel_id,
@@ -235,7 +236,7 @@ class ChordBot(discord.Client):
         try:
             await self._handle_message(message)
         except Exception:
-            logger.exception(
+            logger.error(
                 "Unhandled error while handling message in channel %s",
                 getattr(getattr(message, "channel", None), "id", "?"),
             )
@@ -255,11 +256,10 @@ class ChordBot(discord.Client):
 
     async def _reply_to_message(self, message: discord.Message, reason: str) -> None:
         logger.debug(
-            "Answering message from %s in channel %s (reason=%s): %r",
+            "Answering message from %s in channel %s (reason=%s)",
             message.author,
             message.channel.id,
             reason,
-            message.content[:100],
         )
 
         user_text = clean_message_text(message.content)
@@ -320,13 +320,12 @@ class ChordBot(discord.Client):
                     "지금 API 사용량 한도에 걸렸어요. 잠시 뒤에 다시 물어봐 주세요.",
                 )
                 return
-            except BadRequestError:
-                # A history the provider refuses poisons every later
-                # message in the channel: the same rejected messages get
-                # re-sent forever. Drop it and let the user carry on
-                # rather than making them discover /reset.
-                if self._store.history(channel_id):
-                    logger.exception(
+            except BadRequestError as exc:
+                # A broken tool exchange will fail on every later turn.
+                # Clear only that specific error. Invalid schemas or model
+                # options do not make an otherwise valid history unusable.
+                if self._store.history(channel_id) and is_history_rejection(str(exc)):
+                    logger.error(
                         "Provider rejected the request in channel %s; clearing history",
                         channel_id,
                     )
@@ -336,7 +335,9 @@ class ChordBot(discord.Client):
                         "대화 기록이 꼬여서 초기화했어요. 다시 물어봐 주세요.",
                     )
                 else:
-                    logger.exception("Chat failed in channel %s with no history", channel_id)
+                    logger.error(
+                        "Provider rejected a request in channel %s; preserving history", channel_id
+                    )
                     await self._send(message.channel, "Sorry — something went wrong on my side.")
                 return
             except APITimeoutError:
@@ -351,7 +352,7 @@ class ChordBot(discord.Client):
                 )
                 return
             except Exception:
-                logger.exception("Chat failed in channel %s", channel_id)
+                logger.error("Chat failed in channel %s", channel_id)
                 await self._send(message.channel, "Sorry — something went wrong on my side.")
                 return
             finally:
@@ -396,7 +397,7 @@ class ChordBot(discord.Client):
         try:
             result = await self._compactor.compact(self._store.history(channel_id))
         except Exception:  # noqa: BLE001 - housekeeping must not break chat
-            logger.exception("History compaction failed in channel %s", channel_id)
+            logger.error("History compaction failed in channel %s", channel_id)
             return
         if result is None:
             return
@@ -436,9 +437,7 @@ class ChordBot(discord.Client):
                 getattr(channel, "id", "?"),
             )
         except discord.HTTPException:
-            logger.exception(
-                "Discord rejected a message in channel %s", getattr(channel, "id", "?")
-            )
+            logger.error("Discord rejected a message in channel %s", getattr(channel, "id", "?"))
             if files:
                 # The text is the answer and the chart is the bonus, so a
                 # rejected upload (too large, bad type, attachment

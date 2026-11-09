@@ -208,4 +208,8 @@ class HistoryCompactor:
                 {"role": "user", "content": render_transcript(messages)},
             ]
         )
+        # A partial digest can omit facts it was meant to preserve. Keep the
+        # original history rather than replacing it with a truncated summary.
+        if completion.choices[0].finish_reason == "length":
+            return ""
         return (completion.choices[0].message.content or "").strip()

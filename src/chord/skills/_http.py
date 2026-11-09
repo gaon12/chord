@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -98,8 +99,8 @@ async def _get(url, params, headers) -> httpx.Response:
         response.raise_for_status()
         return response
     except httpx.HTTPStatusError as exc:
-        logger.warning("HTTP %s from %s", exc.response.status_code, url)
+        logger.warning("HTTP %s from %s", exc.response.status_code, urlsplit(url).hostname)
         raise SkillHTTPError(f"{url} answered HTTP {exc.response.status_code}.") from exc
     except httpx.RequestError as exc:
-        logger.warning("Network error calling %s: %s", url, exc)
+        logger.warning("Network error calling %s (%s)", urlsplit(url).hostname, type(exc).__name__)
         raise SkillHTTPError(f"Could not reach {url}.") from exc
