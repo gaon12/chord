@@ -47,7 +47,11 @@ encode the observed response shape as a respx fixture.
 ```
 src/chord/
   config.py         Settings (pydantic-settings, .env -> typed fields)
-  bot.py            Discord events, commands, composition root, MCP loop
+  bot.py            Discord events, composition root, background loops
+  discord_commands.py  slash commands, authorization, runtime settings
+  discord_text.py   incoming message context and reply cleanup
+  message_splitter.py  message limits and balanced code fences
+  channel_turns.py  per-channel turn serialization
   engine.py         one turn = LLM <-> tools loop (max 6 rounds)
   conversation.py   per-channel history (RAM only)
   llm.py            AsyncOpenAI facade (base_url configurable)
@@ -84,3 +88,22 @@ tests/               mirror of src, fully mocked
 
 CI runs the same gates on Ubuntu, Windows and macOS via
 `.github/workflows/tests.yml`.
+
+
+## Discord state and permissions
+
+Each channel processes one complete turn at a time, including history updates
+and compaction. Different channels can proceed independently. `/reset` uses
+the same boundary so a pending reply cannot restore cleared history.
+Idle channel locks are released, and conversation storage keeps at most 1000
+recently updated channels. Reading an unknown channel creates no stored entry.
+
+Model replies and reminder deliveries cannot ping users, roles, or everyone.
+Incoming messages keep code indentation and line breaks. Long outgoing code
+blocks are closed and reopened in each message with their language labels.
+
+Only the Discord application owner (or application team owner) can view or
+reload the persona or change the global reasoning setting, including in DMs.
+Other users may view the reasoning setting. Resetting a guild conversation
+requires Manage Messages permission or application ownership; DM resets affect
+only that DM conversation. These checks are enforced by command callbacks.

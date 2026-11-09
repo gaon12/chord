@@ -157,7 +157,7 @@ def test_clean_message_text_removes_mentions():
 
 
 def test_clean_message_text_handles_nicknames_and_extra_space():
-    assert clean_message_text("<@!42>  hi   there ") == "hi there"
+    assert clean_message_text("<@!42>  hi   there ") == "hi   there"
 
 
 def test_clean_message_text_keeps_regular_text():

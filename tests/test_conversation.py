@@ -15,6 +15,20 @@ def test_history_starts_empty_per_channel():
     assert store.history(2) == []  # channels are independent
 
 
+def test_idle_channel_count_is_bounded_and_reads_do_not_allocate():
+    store = ConversationStore(max_channels=2)
+    for channel in range(100):
+        store.history(channel)
+    assert len(store._channels) == 0
+    store.append(1, _msg("user", "one"))
+    store.append(2, _msg("user", "two"))
+    store.append(1, _msg("user", "active again"))
+    store.append(3, _msg("user", "three"))
+    assert store.history(1)
+    assert store.history(2) == []
+    assert len(store._channels) == 2
+
+
 def test_append_and_read_back():
     store = ConversationStore()
     store.append(1, _msg("user", "hi"), _msg("assistant", "hello"))

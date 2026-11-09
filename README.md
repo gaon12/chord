@@ -116,9 +116,9 @@ python -m chord        # or just `chord`, both start the bot
 * `/tools` - list every tool currently registered, built-in and MCP.
 * `/usage` - show remaining API quotas per provider.
 * `/reminders` - list pending reminders in this channel.
-* `/reset` - clear this channel's conversation memory.
-* `/persona` - view or reload the character definition.
-* `/reasoning` - view or change how hard the bot thinks before answering.
+* `/reset` - clear this channel's conversation (Manage Messages required in guilds).
+* `/persona` - view or reload the character definition (application owner only).
+* `/reasoning` - view reasoning; only the application owner can change it.
 
 **Links**: paste a URL and ask — *"이거 요약해줘"*, *"뭐라고 써있어?"* — and the
 bot opens the page, pulls out the readable text and answers from it. See

@@ -7,7 +7,7 @@ avoids any database dependency.
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import OrderedDict
 
 
 def next_turn_start(history: list[dict], minimum: int) -> int:
@@ -38,13 +38,16 @@ def next_turn_start(history: list[dict], minimum: int) -> int:
 class ConversationStore:
     """Remembers recent messages for each Discord channel."""
 
-    def __init__(self, max_messages: int = 40) -> None:
+    def __init__(self, max_messages: int = 40, max_channels: int = 1000) -> None:
+        if max_messages < 1 or max_channels < 1:
+            raise ValueError("History limits must be positive.")
         self._max = max_messages
-        self._channels: defaultdict[int, list[dict]] = defaultdict(list)
+        self._max_channels = max_channels
+        self._channels: OrderedDict[int, list[dict]] = OrderedDict()
 
     def history(self, channel_id: int) -> list[dict]:
         """Messages so far for one channel (oldest first)."""
-        return list(self._channels[channel_id])
+        return list(self._channels.get(channel_id, []))
 
     def append(self, channel_id: int, *messages: dict) -> None:
         """Add messages to a channel, trimming old ones beyond the limit.
@@ -53,7 +56,12 @@ class ConversationStore:
         recent context is what matters for a chat anyway. It always cuts
         on a turn boundary - see :func:`next_turn_start`.
         """
-        channel_history = self._channels[channel_id]
+        channel_history = self._channels.setdefault(channel_id, [])
+        self._channels.move_to_end(channel_id)
+        # A per-channel limit alone does not bound a bot that visits many
+        # channels. Evict the least recently updated channel when full.
+        while len(self._channels) > self._max_channels:
+            self._channels.popitem(last=False)
         channel_history.extend(messages)
         excess = len(channel_history) - self._max
         if excess > 0:
