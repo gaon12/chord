@@ -145,6 +145,12 @@ without cancelling successful sibling lookups.
 
 Application error logs record operation names and exception types without
 private request text, signed URLs, or raw provider error bodies. Only errors
+in a fixed allowlist have their provider code logged; unknown codes are
+reported as `unknown`. Groq failures include the attempted model, HTTP status,
+exception class, and quota type when the provider names it. Skipped models
+include the estimated request budget and last observed quota counters.
+Successful model changes are logged explicitly. These diagnostics do not
+include raw provider messages or tracebacks. Only errors
 that identify an invalid assistant/tool history exchange clear stored history;
 a bad model name or tool schema does not erase a valid conversation.
 

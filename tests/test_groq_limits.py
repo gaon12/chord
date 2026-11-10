@@ -95,3 +95,22 @@ def test_request_budget_uses_only_fresh_remaining_token_observations():
     assert limits.ready(now=110, required_tokens=1501)
     limits.update({"x-ratelimit-remaining-tokens": "5"}, now=110)
     assert limits.ready(now=111, required_tokens=1501)
+
+
+def test_next_retry_respects_both_daily_quota_and_cooldown():
+    limits = GroqLimits()
+    limits.mark_rate_limited(
+        {
+            "retry-after": "2",
+            "x-ratelimit-remaining-requests": "0",
+            "x-ratelimit-reset-requests": "1h",
+        },
+        now=100,
+    )
+    assert limits.available_at(now=101) == 3700
+
+
+def test_retry_header_takes_precedence_over_error_body_delay():
+    limits = GroqLimits()
+    limits.mark_rate_limited({"retry-after": "12"}, retry_delay=2, now=100)
+    assert limits.available_at(now=100) == 112

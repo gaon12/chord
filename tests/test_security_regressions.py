@@ -5,9 +5,9 @@ from unittest.mock import AsyncMock
 
 import httpcore
 import pytest
-from openai import BadRequestError
+from openai import APIStatusError, BadRequestError
 
-from chord.llm_options import rate_limit_delay
+from chord.llm_options import error_diagnostics, rate_limit_delay
 from chord.network import PublicNetworkBackend, public_addresses
 from test_bot import FakeChannel, FakeMessage, _bad_request, _bot
 from test_groq_provider import MODELS, error, response, service
@@ -107,6 +107,66 @@ async def test_unrelated_request_error_preserves_history_and_private_text(caplog
     with caplog.at_level("DEBUG"):
         await bot.on_message(FakeMessage("private-user-message-123", channel))
     assert bot._store.history(1) == history
+    assert "private-provider-detail-123" not in caplog.text
+    assert "private-user-message-123" not in caplog.text
+    assert "error=BadRequestError status=400" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("quota", "message"),
+    [
+        ("ITPM", "input tokens per minute"),
+        ("OTPM", "output tokens per minute"),
+        ("TPM", "tokens per minute"),
+        ("TPD", "tokens per day"),
+        ("RPM", "requests per minute"),
+        ("RPD", "requests per day"),
+    ],
+)
+def test_error_diagnostics_classify_quota_without_echoing_error_text(quota, message):
+    exc = error()
+    exc.body = {
+        "error": {
+            "message": f"private-provider-detail-123: Rate limit reached on {message}.",
+            "code": "rate_limit_exceeded",
+        }
+    }
+    details = error_diagnostics(exc)
+    assert f"quota={quota}" in details
+    assert "error=RateLimitError status=429 code=rate_limit_exceeded" in details
+    assert "private-provider-detail-123" not in details
+
+
+def test_error_diagnostics_do_not_echo_unknown_provider_fields():
+    exc = error()
+    exc.body = {"code": "private-provider-detail-123", "message": "secret", "type": "secret"}
+    assert error_diagnostics(exc) == "error=RateLimitError status=429 code=unknown quota=unknown"
+
+
+async def test_rejected_groq_request_logs_actual_attempted_model_and_known_code(caplog):
+    exc = error(BadRequestError, 400, code="tool_use_failed")
+    exc.body["message"] = "private-provider-detail-123"
+    llm, create = service(error(), exc)
+    with caplog.at_level("INFO"), pytest.raises(BadRequestError):
+        await llm.complete([])
+    assert f"Groq model {MODELS[1]} rejected the request" in caplog.text
+    assert "error=BadRequestError status=400 code=tool_use_failed" in caplog.text
+    assert "private-provider-detail-123" not in caplog.text
+    assert create.await_count == 2
+
+
+@pytest.mark.parametrize(
+    "exc", [RuntimeError("private-provider-detail-123"), error(APIStatusError, 500)]
+)
+async def test_unexpected_chat_errors_log_exception_type_without_private_text(exc, caplog):
+    bot, engine = _bot(history_token_budget=0)
+
+    async def fail(*args, **kwargs):
+        raise exc
+
+    engine.reply = fail
+    await bot.on_message(FakeMessage("private-user-message-123", FakeChannel(1)))
+    assert f"error={type(exc).__name__}" in caplog.text
     assert "private-provider-detail-123" not in caplog.text
     assert "private-user-message-123" not in caplog.text
 

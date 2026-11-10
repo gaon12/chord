@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 _DURATION_PART = re.compile(r"(\d+(?:\.\d+)?)(ms|h|m|s)")
 _SECONDS = {"h": 3600, "m": 60, "s": 1, "ms": 0.001}
+_RETRY_MESSAGE = re.compile(r"please try again in\s+([\d.a-z]+)", re.I)
 
 
 def duration_seconds(raw: str | None) -> float | None:
@@ -36,6 +37,15 @@ def _count(raw: str | None) -> int | None:
     if raw is None or not raw.strip().isdigit():
         return None
     return int(raw)
+
+
+def retry_message_delay(error: Exception) -> float | None:
+    """Read only an explicit Groq retry duration, never infer a quota bucket."""
+    body = getattr(error, "body", None)
+    details = body.get("error", body) if isinstance(body, dict) else {}
+    message = details.get("message") if isinstance(details, dict) else None
+    match = _RETRY_MESSAGE.search(message) if isinstance(message, str) else None
+    return duration_seconds(match[1].lower().rstrip(".")) if match else None
 
 
 @dataclass
@@ -63,11 +73,19 @@ class GroqLimits:
         self.requests_reset_at = now + request_delay if request_delay is not None else None
         self.tokens_reset_at = now + token_delay if token_delay is not None else None
 
-    def mark_rate_limited(self, headers: Mapping[str, str], *, now: float | None = None) -> None:
+    def mark_rate_limited(
+        self,
+        headers: Mapping[str, str],
+        *,
+        now: float | None = None,
+        retry_delay: float | None = None,
+    ) -> None:
         now = time.monotonic() if now is None else now
         self.update(headers, now=now)
         headers = {key.lower(): value for key, value in headers.items()}
         retry = duration_seconds(headers.get("retry-after"))
+        if retry is None:
+            retry = retry_delay
         # An unreported limit may be RPM or TPD. Do not invent its bucket or
         # assume it resets tomorrow; use a short retry cooldown instead.
         self.retry_at = now + (retry if retry is not None else 60.0)
@@ -79,22 +97,26 @@ class GroqLimits:
         fit. Missing or expired observations must not block an API attempt.
         """
         now = time.monotonic() if now is None else now
-        if now < self.retry_at:
-            return False
+        return now >= self.available_at(now=now, required_tokens=required_tokens)
+
+    def available_at(self, *, now: float | None = None, required_tokens: int = 0) -> float:
+        """Earliest known retry, respecting every observed exhausted bucket."""
+        now = time.monotonic() if now is None else now
+        available = max(now, self.retry_at)
         for remaining, reset in (
             (self.requests_remaining, self.requests_reset_at),
             (self.tokens_remaining, self.tokens_reset_at),
         ):
             if remaining == 0 and reset is not None and now < reset:
-                return False
+                available = max(available, reset)
         if (
             self.tokens_remaining is not None
             and self.tokens_reset_at is not None
             and now < self.tokens_reset_at
             and self.tokens_remaining < required_tokens
         ):
-            return False
-        return True
+            available = max(available, self.tokens_reset_at)
+        return available
 
     def describe(self, *, now: float | None = None) -> str:
         now = time.monotonic() if now is None else now

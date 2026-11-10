@@ -65,6 +65,46 @@ DEFAULT_RATE_LIMIT_WAIT = 20.0
 _RETRY_DELAY_RE = re.compile(r"retry[-_ ]?delay['\"]?\s*[:=]\s*['\"]?(\d+(?:\.\d+)?)s?", re.I)
 
 
+def error_diagnostics(error: Exception) -> str:
+    """Log bounded error metadata without provider text, requests, or credentials."""
+    body = getattr(error, "body", None)
+    details = body.get("error", body) if isinstance(body, dict) else {}
+    if not isinstance(details, dict):
+        details = {}
+    code = details.get("code")
+    known_codes = (
+        "rate_limit_exceeded",
+        "model_not_found",
+        "model_decommissioned",
+        "tool_use_failed",
+        "tool_call_validation_failed",
+        "json_validate_failed",
+        "context_length_exceeded",
+        "invalid_request_error",
+        "invalid_api_key",
+        "insufficient_quota",
+    )
+    # Unknown fields may contain arbitrary provider data. Never echo them.
+    code = code if code in known_codes else "unknown"
+    message = details.get("message")
+    message = message.lower() if isinstance(message, str) else ""
+    quota = "unknown"
+    for name, marker in (
+        ("ITPM", "input tokens per minute"),
+        ("OTPM", "output tokens per minute"),
+        ("TPM", "tokens per minute"),
+        ("TPD", "tokens per day"),
+        ("RPM", "requests per minute"),
+        ("RPD", "requests per day"),
+    ):
+        if marker in message:
+            quota = name
+            break
+    status = getattr(error, "status_code", None)
+    status = status if isinstance(status, int) else "unknown"
+    return f"error={type(error).__name__} status={status} code={code} quota={quota}"
+
+
 def rate_limit_delay(error: Exception) -> float | None:
     """How long the provider asked us to wait, if it said.
 

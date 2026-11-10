@@ -13,7 +13,8 @@ import httpx
 from openai import APIStatusError, AsyncOpenAI, BadRequestError, NotFoundError, RateLimitError
 from openai.types.chat import ChatCompletion, ChatCompletionToolParam
 
-from chord.groq_limits import GroqLimits
+from chord.groq_limits import GroqLimits, retry_message_delay
+from chord.llm_options import error_diagnostics
 from chord.token_estimates import estimate_request_tokens
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,7 @@ GROQ_FREE_MODELS = (
     "openai/gpt-oss-120b",
     "openai/gpt-oss-20b",
 )
+MAX_GROQ_RECOVERY_WAIT = 10.0
 
 
 def groq_reasoning_effort(model: str, effort: str | None) -> str | None:
@@ -71,22 +73,49 @@ class GroqProvider:
         effort: str | None,
         extra_body: dict,
     ) -> ChatCompletion:
-        # Chat, compaction, and text skills share this provider. Serializing
-        # requests prevents them from racing on a model's last header snapshot.
-        async with self._lock:
-            return await self._complete(list(messages), tools, effort, extra_body)
+        # Serialize attempts, but release the lock during recovery so another
+        # channel's smaller request can still use any remaining capacity.
+        messages = list(messages)
+        required_tokens = estimate_request_tokens(messages, tools, self.max_tokens)
+        too_large: set[str] = set()
+        waited = False
+        while True:
+            async with self._lock:
+                try:
+                    return await self._complete(messages, tools, effort, extra_body, too_large)
+                except RateLimitError:
+                    now = time.monotonic()
+                    available = [
+                        self.limits[model].available_at(now=now, required_tokens=required_tokens)
+                        for model in self.models
+                        if model not in too_large and model not in self._unavailable
+                    ]
+                    delay = min(available) - now if available else None
+                    if waited or delay is None or not 0 < delay <= MAX_GROQ_RECOVERY_WAIT:
+                        raise
+                    waited = True
+                    logger.info(
+                        "All Groq candidates are currently limited; waiting %.2fs "
+                        "once to resume the pending completion.",
+                        delay,
+                    )
+            await asyncio.sleep(delay)
 
-    async def _complete(self, messages, tools, effort, extra_body) -> ChatCompletion:
+    async def _complete(self, messages, tools, effort, extra_body, too_large) -> ChatCompletion:
         last_error: Exception | None = None
+        last_limit_error: RateLimitError | None = None
         required_tokens = estimate_request_tokens(messages, tools, self.max_tokens)
         for model in self.models:
+            if model in too_large:
+                continue
             limits = self.limits[model]
             if not limits.ready(required_tokens=required_tokens):
                 logger.info(
                     "Skipping Groq model %s: cooldown or insufficient observed capacity "
-                    "for an estimated %d-token request.",
+                    "for an estimated %d-token request (%s).",
                     model,
                     required_tokens,
+                    limits.describe(),
                 )
                 continue
             kwargs = {
@@ -112,21 +141,29 @@ class GroqProvider:
                 completion = raw.parse()
                 if inspect.isawaitable(completion):
                     completion = await completion
+                if model != self.model:
+                    logger.info("Groq active model changed from %s to %s.", self.model, model)
                 self.model = model
                 self._unavailable.discard(model)
                 return completion
             except RateLimitError as exc:
-                limits.mark_rate_limited(exc.response.headers)
+                limits.mark_rate_limited(exc.response.headers, retry_delay=retry_message_delay(exc))
                 logger.info(
-                    "Groq model %s is rate limited; checking the next configured model.", model
+                    "Groq model %s is rate limited; checking the next configured model (%s; %s).",
+                    model,
+                    error_diagnostics(exc),
+                    limits.describe(),
                 )
-                last_error = exc
+                last_limit_error = exc
             except (BadRequestError, NotFoundError) as exc:
                 # Only an explicit missing/decommissioned model justifies a
                 # fallback. Invalid schemas, credentials, and other requests
                 # must remain visible errors instead of trying every model.
                 code = _error_code(exc)
                 if code not in {"model_not_found", "model_decommissioned"}:
+                    logger.warning(
+                        "Groq model %s rejected the request (%s).", model, error_diagnostics(exc)
+                    )
                     raise
                 limits.retry_at = time.monotonic() + 300
                 self._unavailable.add(model)
@@ -137,21 +174,31 @@ class GroqProvider:
                 # code=rate_limit_exceeded. The SDK does not classify this as
                 # RateLimitError, so it needs an explicit routing path.
                 if exc.status_code != 413 or _error_code(exc) != "rate_limit_exceeded":
+                    logger.warning(
+                        "Groq model %s request failed (%s).", model, error_diagnostics(exc)
+                    )
                     raise
                 limits.update(exc.response.headers)
+                too_large.add(model)
                 logger.info(
                     "Groq model %s cannot fit this request's token rate budget; "
-                    "checking the next configured model.",
+                    "checking the next configured model (%s).",
                     model,
+                    error_diagnostics(exc),
                 )
                 # A smaller request may fit immediately. Do not put the model
                 # into a global cooldown just because this prompt is too big.
-                last_error = RateLimitError(
+                last_limit_error = RateLimitError(
                     "The request exceeds the Groq model's token rate budget.",
                     response=exc.response,
                     body=exc.body,
                 )
+            except Exception as exc:
+                logger.warning("Groq model %s request failed (%s).", model, error_diagnostics(exc))
+                raise
 
+        if last_limit_error is not None:
+            raise last_limit_error
         if last_error is not None:
             raise last_error
         if all(model in self._unavailable for model in self.models):

@@ -41,7 +41,7 @@ error also tries the next model; unrelated 413 errors remain visible.
 Headers can also mark a model as exhausted before the next request. Models
 in a known cooldown are skipped, and the preferred model is tried again
 after its cooldown or exhausted quota resets. Each model is attempted at
-most once per completion. There are no hidden SDK retries in Groq mode.
+most once per routing pass. There are no hidden SDK retries in Groq mode.
 
 Before each request, routing estimates the tokens for the full conversation,
 tool calls/results, and offered tool schemas, adds a framing/error allowance
@@ -59,6 +59,16 @@ their HTTP 429/413 errors are handled at request time. If every model is
 limited or cannot fit the request, the bot reports the usage limit only after
 checking all configured candidates. A prompt larger than every model's
 per-request token rate budget still needs to be shortened.
+
+When every candidate is temporarily blocked, the pending completion can wait
+once if the earliest known recovery is within ten seconds, then run one more
+routing pass. This resumes the current tool round without repeating completed
+tool actions. The wait releases the shared provider lock so other channels
+can use any capacity that fits their requests. Every known exhausted bucket
+must reset: a short `retry-after` never overrides an exhausted daily quota.
+Long or unknown recovery times return the usage-limit error immediately.
+Models that returned a token-budget 413 are excluded from this recovery pass;
+waiting does not make the same oversized prompt fit their per-request budget.
 
 An explicit `model_not_found` or `model_decommissioned` error also allows
 fallback, with a five-minute cooldown. Authentication errors, unrelated
@@ -121,9 +131,10 @@ reservation. Chat, history compaction, and LLM-backed text tools share one
 client and one set of observations. Their Groq requests are serialized to
 avoid races inside this process.
 
-If a 429 has neither a useful reset header nor `retry-after`, the model gets
-a sixty-second cooldown. The code does not guess whether that hidden quota
-was RPM or TPD.
+The cooldown follows `retry-after`, or an explicit `Please try again in ...`
+duration in the error body if that header is missing. If neither is supplied,
+the model gets a sixty-second cooldown. The code does not guess whether that
+hidden quota was RPM or TPD.
 
 ## On-demand tool schemas
 

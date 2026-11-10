@@ -1,5 +1,6 @@
 """Ordered fallback, safe request fields, and per-model reasoning behavior."""
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -8,6 +9,7 @@ import pytest
 from openai import APIStatusError, AuthenticationError, BadRequestError, RateLimitError
 from openai.types.chat import ChatCompletion
 
+from chord import groq_limits, groq_provider
 from chord.config import Settings, load_settings
 from chord.engine import ChatEngine
 from chord.groq_provider import GROQ_BASE_URL, GROQ_FREE_MODELS, groq_reasoning_effort
@@ -19,6 +21,21 @@ from test_engine import _tool_call_completion
 
 MODELS = GROQ_FREE_MODELS
 MESSAGES = [{"role": "user", "content": "hello"}]
+
+
+@pytest.fixture
+def groq_clock(monkeypatch):
+    clock, sleeps = [1000.0], []
+
+    async def sleep(delay):
+        sleeps.append(delay)
+        clock[0] += delay
+
+    timer = SimpleNamespace(monotonic=lambda: clock[0])
+    monkeypatch.setattr(groq_provider, "time", timer)
+    monkeypatch.setattr(groq_limits, "time", timer)
+    monkeypatch.setattr(groq_provider, "asyncio", SimpleNamespace(Lock=asyncio.Lock, sleep=sleep))
+    return clock, sleeps
 
 
 def settings(**overrides):
@@ -189,6 +206,131 @@ async def test_all_models_limited_fail_quickly_without_extra_requests():
     assert create.await_count == 3
 
 
+async def test_all_limited_models_resume_after_the_earliest_short_cooldown(groq_clock):
+    llm, create = service(
+        error(headers={"retry-after": "2"}),
+        error(headers={"retry-after": "5"}),
+        error(headers={"retry-after": "6"}),
+        response(),
+    )
+    await llm.complete(MESSAGES)
+    assert groq_clock[1] == [2]
+    assert [c.kwargs["model"] for c in create.call_args_list] == [*MODELS, MODELS[0]]
+
+
+async def test_unavailable_fallbacks_do_not_mask_a_recoverable_primary_rate_limit(groq_clock):
+    llm, create = service(
+        error(headers={"retry-after": "2"}),
+        error(BadRequestError, 400, code="model_decommissioned"),
+        error(BadRequestError, 400, code="model_decommissioned"),
+        response(),
+    )
+    await llm.complete(MESSAGES)
+    assert groq_clock[1] == [2]
+    assert [c.kwargs["model"] for c in create.call_args_list] == [*MODELS, MODELS[0]]
+
+
+async def test_recovery_waits_only_once_if_quota_is_consumed_again(groq_clock):
+    llm, create = service(
+        error(headers={"retry-after": "2"}),
+        error(headers={"retry-after": "5"}),
+        error(headers={"retry-after": "6"}),
+        error(headers={"retry-after": "2"}),
+    )
+    with pytest.raises(RateLimitError):
+        await llm.complete(MESSAGES)
+    assert groq_clock[1] == [2]
+    assert create.await_count == 4
+
+
+async def test_413_model_is_not_retried_while_recovering_another_models_quota(groq_clock):
+    llm, create = service(
+        error(APIStatusError, 413, code="rate_limit_exceeded"),
+        error(headers={"retry-after": "2"}),
+        error(headers={"retry-after": "600"}),
+        response(MODELS[1]),
+    )
+    await llm.complete(MESSAGES)
+    assert groq_clock[1] == [2]
+    assert [c.kwargs["model"] for c in create.call_args_list] == [*MODELS, MODELS[1]]
+
+
+async def test_daily_quota_prevents_a_short_retry_after_from_triggering_recovery(groq_clock):
+    llm, create = service(
+        *(
+            error(
+                headers={
+                    "retry-after": "2",
+                    "x-ratelimit-remaining-requests": "0",
+                    "x-ratelimit-reset-requests": "24h",
+                }
+            )
+            for _ in MODELS
+        )
+    )
+    with pytest.raises(RateLimitError):
+        await llm.complete(MESSAGES)
+    assert groq_clock[1] == []
+    assert create.await_count == 3
+
+
+@pytest.mark.parametrize(("duration", "waits"), [("2.5s", [2.5]), ("1h2m", [])])
+async def test_error_body_retry_duration_is_used_when_headers_are_missing(
+    duration, waits, groq_clock
+):
+    limited = error()
+    limited.body = {"error": {"message": f"Rate limit reached. Please try again in {duration}."}}
+    llm, create = service(
+        limited,
+        error(headers={"retry-after": "600"}),
+        error(headers={"retry-after": "600"}),
+        response(),
+    )
+    if waits:
+        await llm.complete(MESSAGES)
+    else:
+        with pytest.raises(RateLimitError):
+            await llm.complete(MESSAGES)
+        with pytest.raises(RateLimitError):
+            await llm.complete(MESSAGES)
+    assert groq_clock[1] == waits
+    assert create.await_count == (4 if waits else 3)
+
+
+async def test_preemptively_skipped_models_can_recover_without_failing_a_turn(groq_clock):
+    llm, create = service(response())
+    for index, model in enumerate(MODELS):
+        llm._groq.limits[model].update(
+            {"x-ratelimit-remaining-tokens": "10", "x-ratelimit-reset-tokens": f"{index + 2}s"}
+        )
+    await llm.complete(MESSAGES)
+    assert groq_clock[1] == [2]
+    assert create.await_count == 1
+
+
+async def test_recovery_releases_provider_lock_so_smaller_requests_can_continue(
+    monkeypatch, groq_clock
+):
+    llm, create = service(response(), response())
+    for index, model in enumerate(MODELS):
+        llm._groq.limits[model].update(
+            {
+                "x-ratelimit-remaining-tokens": "2000" if index == 0 else "0",
+                "x-ratelimit-reset-tokens": "2s" if index == 0 else "60s",
+            }
+        )
+
+    async def recover(delay):
+        assert not llm._groq._lock.locked()
+        await llm.complete(MESSAGES)
+        groq_clock[0][0] += delay
+
+    monkeypatch.setattr(groq_provider.asyncio, "sleep", recover)
+    await asyncio.wait_for(llm.complete([{"role": "user", "content": "long request " * 1000}]), 2)
+    assert create.await_count == 2
+    assert create.call_args_list[0].kwargs["messages"] == MESSAGES
+
+
 @pytest.mark.parametrize(("cls", "status"), [(AuthenticationError, 401), (BadRequestError, 400)])
 async def test_authentication_and_invalid_request_errors_do_not_trigger_fallback(cls, status):
     llm, create = service(error(cls, status))
@@ -232,8 +374,8 @@ async def test_tools_and_history_survive_a_model_switch():
         assert call.kwargs["tool_choice"] == "auto"
 
 
-@pytest.mark.parametrize("limit", ["429", "413", "remaining_tokens"])
-async def test_mid_tool_turn_switches_models_without_repeating_the_tool(limit):
+@pytest.mark.parametrize("limit", ["429", "413", "remaining_tokens", "recovery"])
+async def test_mid_tool_turn_switches_models_without_repeating_the_tool(limit, groq_clock):
     class Lookup(Skill):
         name = "lookup"
         description = "Look up a result."
@@ -257,16 +399,21 @@ async def test_mid_tool_turn_switches_models_without_repeating_the_tool(limit):
         _tool_call_completion(("lookup-1", "lookup", "{}"))
     )
     results = [first]
-    if limit != "remaining_tokens":
+    if limit == "recovery":
+        results.extend(error(headers={"retry-after": str(delay)}) for delay in [2, 600, 600])
+    elif limit != "remaining_tokens":
         results.append(
             error() if limit == "429" else error(APIStatusError, 413, code="rate_limit_exceeded")
         )
-    llm, create = service(*results, response(MODELS[1]))
+    llm, create = service(*results, response(MODELS[0] if limit == "recovery" else MODELS[1]))
     engine = ChatEngine(llm, registry, "system")
     answer, turn = await engine.reply("look it up", [])
     assert answer == "hello"
     expected = [MODELS[0], MODELS[1]]
-    if limit != "remaining_tokens":
+    if limit == "recovery":
+        expected = [MODELS[0], *MODELS, MODELS[0]]
+        assert groq_clock[1] == [2]
+    elif limit != "remaining_tokens":
         expected.insert(1, MODELS[0])
     assert [call.kwargs["model"] for call in create.call_args_list] == expected
     skill.run.assert_awaited_once()

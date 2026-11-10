@@ -51,7 +51,7 @@ from chord.discord_text import (
 )
 from chord.engine import ChatEngine
 from chord.llm import LLMService
-from chord.llm_options import is_history_rejection
+from chord.llm_options import error_diagnostics, is_history_rejection
 from chord.mcp_client import McpManager
 from chord.message_splitter import split_message as split_message
 from chord.persona import PersonaProvider, with_tool_index
@@ -329,8 +329,9 @@ class ChordBot(discord.Client):
                 # options do not make an otherwise valid history unusable.
                 if self._store.history(channel_id) and is_history_rejection(str(exc)):
                     logger.error(
-                        "Provider rejected the request in channel %s; clearing history",
+                        "Provider rejected the request in channel %s; clearing history (%s)",
                         channel_id,
+                        error_diagnostics(exc),
                     )
                     self._store.reset(channel_id)
                     await self._send(
@@ -339,7 +340,9 @@ class ChordBot(discord.Client):
                     )
                 else:
                     logger.error(
-                        "Provider rejected a request in channel %s; preserving history", channel_id
+                        "Provider rejected a request in channel %s; preserving history (%s)",
+                        channel_id,
+                        error_diagnostics(exc),
                     )
                     await self._send(message.channel, "Sorry — something went wrong on my side.")
                 return
@@ -354,8 +357,8 @@ class ChordBot(discord.Client):
                     "생각이 너무 길어져서 중간에 멈췄어요. 다시 물어봐 주세요.",
                 )
                 return
-            except Exception:
-                logger.error("Chat failed in channel %s", channel_id)
+            except Exception as exc:
+                logger.error("Chat failed in channel %s (%s)", channel_id, error_diagnostics(exc))
                 await self._send(message.channel, "Sorry — something went wrong on my side.")
                 return
             finally:
