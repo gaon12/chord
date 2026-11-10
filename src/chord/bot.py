@@ -315,8 +315,7 @@ class ChordBot(discord.Client):
                 )
             except RateLimitError:
                 logger.warning(
-                    "Provider rate limit hit in channel %s. Large tool catalogs "
-                    "are the usual cause - see the startup warning.",
+                    "Provider rate budget exhausted in channel %s after configured model routing.",
                     channel_id,
                 )
                 await self._send(

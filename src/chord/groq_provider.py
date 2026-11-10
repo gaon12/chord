@@ -10,10 +10,11 @@ import time
 from collections.abc import Iterable
 
 import httpx
-from openai import AsyncOpenAI, BadRequestError, NotFoundError, RateLimitError
+from openai import APIStatusError, AsyncOpenAI, BadRequestError, NotFoundError, RateLimitError
 from openai.types.chat import ChatCompletion, ChatCompletionToolParam
 
 from chord.groq_limits import GroqLimits
+from chord.token_estimates import estimate_request_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -77,9 +78,16 @@ class GroqProvider:
 
     async def _complete(self, messages, tools, effort, extra_body) -> ChatCompletion:
         last_error: Exception | None = None
+        required_tokens = estimate_request_tokens(messages, tools, self.max_tokens)
         for model in self.models:
             limits = self.limits[model]
-            if not limits.ready():
+            if not limits.ready(required_tokens=required_tokens):
+                logger.info(
+                    "Skipping Groq model %s: cooldown or insufficient observed capacity "
+                    "for an estimated %d-token request.",
+                    model,
+                    required_tokens,
+                )
                 continue
             kwargs = {
                 "model": model,
@@ -124,6 +132,25 @@ class GroqProvider:
                 self._unavailable.add(model)
                 logger.warning("Groq model %s is unavailable (%s).", model, code)
                 last_error = exc
+            except APIStatusError as exc:
+                # Groq also reports requests exceeding ITPM/TPM as 413 with
+                # code=rate_limit_exceeded. The SDK does not classify this as
+                # RateLimitError, so it needs an explicit routing path.
+                if exc.status_code != 413 or _error_code(exc) != "rate_limit_exceeded":
+                    raise
+                limits.update(exc.response.headers)
+                logger.info(
+                    "Groq model %s cannot fit this request's token rate budget; "
+                    "checking the next configured model.",
+                    model,
+                )
+                # A smaller request may fit immediately. Do not put the model
+                # into a global cooldown just because this prompt is too big.
+                last_error = RateLimitError(
+                    "The request exceeds the Groq model's token rate budget.",
+                    response=exc.response,
+                    body=exc.body,
+                )
 
         if last_error is not None:
             raise last_error

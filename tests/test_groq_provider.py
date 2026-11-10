@@ -5,12 +5,17 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
-from openai import AuthenticationError, BadRequestError, RateLimitError
+from openai import APIStatusError, AuthenticationError, BadRequestError, RateLimitError
 from openai.types.chat import ChatCompletion
 
 from chord.config import Settings, load_settings
+from chord.engine import ChatEngine
 from chord.groq_provider import GROQ_BASE_URL, GROQ_FREE_MODELS, groq_reasoning_effort
 from chord.llm import LLMService, create_client
+from chord.skills.base import Skill
+from chord.skills.registry import SkillRegistry
+from chord.token_estimates import estimate_request_tokens
+from test_engine import _tool_call_completion
 
 MODELS = GROQ_FREE_MODELS
 MESSAGES = [{"role": "user", "content": "hello"}]
@@ -106,6 +111,75 @@ async def test_success_headers_can_skip_an_exhausted_primary_model():
     assert create.call_args.kwargs["model"] == MODELS[1]
 
 
+async def test_nearly_exhausted_model_is_skipped_before_sending_another_request():
+    llm, create = service(
+        response(
+            **{
+                "x-ratelimit-remaining-tokens": "1200",
+                "x-ratelimit-reset-tokens": "60s",
+            }
+        ),
+        response(MODELS[1]),
+        response(),
+    )
+    await llm.complete(MESSAGES)
+    await llm.complete([{"role": "user", "content": "긴 질문입니다. " * 100}])
+    assert create.call_args.kwargs["model"] == MODELS[1]
+    # Skipping a large request must not globally disable smaller requests.
+    await llm.complete(MESSAGES)
+    assert create.call_args.kwargs["model"] == MODELS[0]
+
+
+async def test_tool_schema_budget_can_trigger_preemptive_fallback():
+    llm, create = service(response(MODELS[1]))
+    tools = [{"type": "function", "function": {"name": "lookup", "description": "x" * 2000}}]
+    llm._groq.limits[MODELS[0]].update(
+        {
+            "x-ratelimit-remaining-tokens": str(estimate_request_tokens(MESSAGES, None, 1024)),
+            "x-ratelimit-reset-tokens": "60s",
+        }
+    )
+    await llm.complete(MESSAGES, tools)
+    assert create.await_count == 1
+    assert create.call_args.kwargs["model"] == MODELS[1]
+
+
+async def test_all_models_with_insufficient_remaining_tokens_fail_without_requests():
+    llm, create = service()
+    for limits in llm._groq.limits.values():
+        limits.update({"x-ratelimit-remaining-tokens": "10", "x-ratelimit-reset-tokens": "60s"})
+    with pytest.raises(RateLimitError):
+        await llm.complete(MESSAGES)
+    create.assert_not_awaited()
+
+
+async def test_token_rate_budget_413_falls_back_without_a_global_cooldown():
+    llm, create = service(
+        error(APIStatusError, 413, code="rate_limit_exceeded"),
+        response(MODELS[1]),
+        response(),
+    )
+    await llm.complete(MESSAGES)
+    assert [c.kwargs["model"] for c in create.call_args_list] == list(MODELS[:2])
+    await llm.complete(MESSAGES)
+    assert create.call_args.kwargs["model"] == MODELS[0]
+
+
+async def test_all_models_exceeding_token_rate_budget_raise_a_usage_limit():
+    llm, create = service(*(error(APIStatusError, 413, code="rate_limit_exceeded") for _ in MODELS))
+    with pytest.raises(RateLimitError):
+        await llm.complete(MESSAGES)
+    assert create.await_count == len(MODELS)
+
+
+@pytest.mark.parametrize("status", [400, 403, 413, 500])
+async def test_unrelated_status_errors_do_not_trigger_fallback(status):
+    llm, create = service(error(APIStatusError, status))
+    with pytest.raises(APIStatusError):
+        await llm.complete(MESSAGES)
+    assert create.await_count == 1
+
+
 async def test_all_models_limited_fail_quickly_without_extra_requests():
     llm, create = service(error(), error(), error())
     with pytest.raises(RateLimitError):
@@ -156,6 +230,52 @@ async def test_tools_and_history_survive_a_model_switch():
         assert call.kwargs["messages"] == MESSAGES
         assert call.kwargs["tools"] == tools
         assert call.kwargs["tool_choice"] == "auto"
+
+
+@pytest.mark.parametrize("limit", ["429", "413", "remaining_tokens"])
+async def test_mid_tool_turn_switches_models_without_repeating_the_tool(limit):
+    class Lookup(Skill):
+        name = "lookup"
+        description = "Look up a result."
+
+        async def run(self):
+            return "결과" * 1000
+
+    skill = Lookup()
+    skill.run = AsyncMock(wraps=skill.run)
+    registry = SkillRegistry()
+    registry.register(skill)
+    first = response(
+        **{
+            "x-ratelimit-remaining-tokens": "2000",
+            "x-ratelimit-reset-tokens": "60s",
+        }
+        if limit == "remaining_tokens"
+        else {}
+    )
+    first.parse = lambda: ChatCompletion.model_validate(
+        _tool_call_completion(("lookup-1", "lookup", "{}"))
+    )
+    results = [first]
+    if limit != "remaining_tokens":
+        results.append(
+            error() if limit == "429" else error(APIStatusError, 413, code="rate_limit_exceeded")
+        )
+    llm, create = service(*results, response(MODELS[1]))
+    engine = ChatEngine(llm, registry, "system")
+    answer, turn = await engine.reply("look it up", [])
+    assert answer == "hello"
+    expected = [MODELS[0], MODELS[1]]
+    if limit != "remaining_tokens":
+        expected.insert(1, MODELS[0])
+    assert [call.kwargs["model"] for call in create.call_args_list] == expected
+    skill.run.assert_awaited_once()
+    assert [message["role"] for message in turn] == ["user", "assistant", "tool", "assistant"]
+    assert create.call_args.kwargs["messages"][-1] == {
+        "role": "tool",
+        "tool_call_id": "lookup-1",
+        "content": "결과" * 1000,
+    }
 
 
 async def test_paid_mode_uses_only_the_explicit_model():

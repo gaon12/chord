@@ -2,6 +2,7 @@
 
 import json
 
+import pytest
 from openai import AsyncOpenAI
 
 try:  # SDK 3.x uses httpx2; SDK 1.x and 2.x use httpx.
@@ -14,7 +15,8 @@ from chord.llm import LLMService
 from test_groq_provider import settings
 
 
-async def test_real_sdk_fallback_reads_success_and_error_headers():
+@pytest.mark.parametrize("status", [429, 413])
+async def test_real_sdk_fallback_reads_success_and_error_headers(status):
     calls = []
 
     def handle(request):
@@ -22,10 +24,14 @@ async def test_real_sdk_fallback_reads_success_and_error_headers():
         calls.append(payload)
         if payload["model"] == GROQ_FREE_MODELS[0]:
             return sdk_httpx.Response(
-                429,
+                status,
                 headers={"retry-after": "20"},
                 json={
-                    "error": {"message": "limited", "type": "rate_limit_error"},
+                    "error": {
+                        "message": "limited",
+                        "type": "tokens",
+                        "code": "rate_limit_exceeded",
+                    },
                 },
             )
         return sdk_httpx.Response(

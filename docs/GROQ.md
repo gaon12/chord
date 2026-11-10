@@ -35,10 +35,30 @@ Free mode tries these models in this exact order:
 3. `openai/gpt-oss-20b`
 
 A response with HTTP 429 moves to the next available model immediately.
+Groq also returns HTTP 413 with `code=rate_limit_exceeded` when a request
+exceeds a model's input-token/minute or token/minute budget. This specific
+error also tries the next model; unrelated 413 errors remain visible.
 Headers can also mark a model as exhausted before the next request. Models
 in a known cooldown are skipped, and the preferred model is tried again
 after its cooldown or exhausted quota resets. Each model is attempted at
 most once per completion. There are no hidden SDK retries in Groq mode.
+
+Before each request, routing estimates the tokens for the full conversation,
+tool calls/results, and offered tool schemas, adds a framing/error allowance
+(10% of the prompt, at least 64 tokens), and reserves the configured maximum
+completion tokens (including reasoning). If a model's last observed TPM
+remaining cannot cover that budget, routing skips it immediately. This also
+applies between tool rounds, preserving completed tool results without
+executing their actions again. A shorter request may still use that model;
+insufficient capacity for one prompt does not disable it globally.
+
+Token estimates are approximate. Missing or expired remaining-token headers
+allow a request, and an actual rate-limit response still triggers fallback.
+RPM, TPD, and separate input/output quotas are not reported by these headers;
+their HTTP 429/413 errors are handled at request time. If every model is
+limited or cannot fit the request, the bot reports the usage limit only after
+checking all configured candidates. A prompt larger than every model's
+per-request token rate budget still needs to be shortened.
 
 An explicit `model_not_found` or `model_decommissioned` error also allows
 fallback, with a five-minute cooldown. Authentication errors, unrelated

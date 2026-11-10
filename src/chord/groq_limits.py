@@ -72,7 +72,12 @@ class GroqLimits:
         # assume it resets tomorrow; use a short retry cooldown instead.
         self.retry_at = now + (retry if retry is not None else 60.0)
 
-    def ready(self, *, now: float | None = None) -> bool:
+    def ready(self, *, now: float | None = None, required_tokens: int = 0) -> bool:
+        """Check cooldowns and whether fresh TPM capacity fits this request.
+
+        A capacity skip is local to the request: a shorter prompt may still
+        fit. Missing or expired observations must not block an API attempt.
+        """
         now = time.monotonic() if now is None else now
         if now < self.retry_at:
             return False
@@ -82,6 +87,13 @@ class GroqLimits:
         ):
             if remaining == 0 and reset is not None and now < reset:
                 return False
+        if (
+            self.tokens_remaining is not None
+            and self.tokens_reset_at is not None
+            and now < self.tokens_reset_at
+            and self.tokens_remaining < required_tokens
+        ):
+            return False
         return True
 
     def describe(self, *, now: float | None = None) -> str:

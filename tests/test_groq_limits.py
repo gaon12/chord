@@ -82,3 +82,16 @@ def test_unreported_limit_uses_a_bounded_cooldown():
     limits.mark_rate_limited({}, now=100)
     assert not limits.ready(now=159)
     assert limits.ready(now=160)
+
+
+def test_request_budget_uses_only_fresh_remaining_token_observations():
+    limits = GroqLimits()
+    limits.update(
+        {"x-ratelimit-remaining-tokens": "1500", "x-ratelimit-reset-tokens": "10s"},
+        now=100,
+    )
+    assert limits.ready(now=101, required_tokens=1500)
+    assert not limits.ready(now=101, required_tokens=1501)
+    assert limits.ready(now=110, required_tokens=1501)
+    limits.update({"x-ratelimit-remaining-tokens": "5"}, now=110)
+    assert limits.ready(now=111, required_tokens=1501)

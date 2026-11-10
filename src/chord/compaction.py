@@ -18,10 +18,12 @@ system messages appearing anywhere but first.
 
 from __future__ import annotations
 
-import json
 import logging
 
 from chord.llm import LLMService
+from chord.token_estimates import estimate_history_tokens
+from chord.token_estimates import estimate_message_tokens as estimate_message_tokens
+from chord.token_estimates import estimate_tokens as estimate_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -51,35 +53,6 @@ SUMMARY_SYSTEM_PROMPT = (
     "digest, with no preamble. If the transcript starts with an earlier "
     "digest, merge it into the new one."
 )
-
-
-def estimate_tokens(text: str) -> int:
-    """Rough token count for mixed Korean/English chat text.
-
-    Deliberately not the chars-per-token ratio used for tool schemas in
-    :mod:`chord.bot`: that one is calibrated on ASCII JSON, while a
-    Korean sentence costs roughly one token per character. Counting
-    non-ASCII characters as a token each keeps the estimate from
-    under-reading a Korean channel by a factor of three.
-
-    Only ever used to decide *when* to compact, never for accounting.
-    """
-    ascii_chars = sum(1 for char in text if char.isascii())
-    return ascii_chars // 4 + (len(text) - ascii_chars)
-
-
-def estimate_message_tokens(message: dict) -> int:
-    """Tokens one stored message adds, role framing included.
-
-    Serializing to JSON covers tool calls and tool results as readily as
-    plain content, and ``ensure_ascii=False`` keeps Korean text one
-    character per character instead of six.
-    """
-    return estimate_tokens(json.dumps(message, ensure_ascii=False)) + 4
-
-
-def estimate_history_tokens(history: list[dict]) -> int:
-    return sum(estimate_message_tokens(message) for message in history)
 
 
 def split_for_compaction(history: list[dict], keep_tokens: int) -> tuple[list[dict], list[dict]]:
